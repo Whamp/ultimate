@@ -148,6 +148,22 @@ function annotationId(value: JsonValue | undefined): string {
   return id
 }
 
+function supportedPlanField(record: string, field: string): boolean {
+  if (!record.includes('.')) {
+    return ['title', 'body', 'verdict'].includes(field)
+  }
+  if (['title', 'description', 'verdict'].includes(field)) {
+    return true
+  }
+  const note = /^notes:(.+):(0|[1-9]\d*)$/.exec(field)
+  return (
+    !!note &&
+    Number.isSafeInteger(Number(note[2])) &&
+    Number.isFinite(Date.parse(note[1])) &&
+    new Date(note[1]).toISOString() === note[1]
+  )
+}
+
 /** Decode untrusted action/local-storage sources once, keeping variants explicit thereafter. */
 export function parseAnnotationSource(value: JsonValue | undefined): AnnotationSource {
   const source = objectValue(value)
@@ -157,22 +173,22 @@ export function parseAnnotationSource(value: JsonValue | undefined): AnnotationS
   if (raw.kind === 'plan' && raw.document === 'ultimate.plan') {
     const record = textValue(raw.record, 100)
     const field = textValue(raw.field, 100)
-    if (
-      !/^E\d+(?:\.\d+)?$/.test(record) ||
-      (!['title', 'body', 'description', 'verdict'].includes(field) &&
-        !/^notes:.+:\d+$/.test(field))
-    ) {
+    if (!/^E\d+(?:\.\d+)?$/.test(record) || !supportedPlanField(record, field)) {
       throw new Error('Annotation input: unsupported plan record or field')
     }
     location = { kind: 'plan', conversationId, document: 'ultimate.plan', record, field }
   } else if (raw.kind === 'entry') {
     location = { kind: 'entry', conversationId, entryId: positiveInteger(raw.entryId) }
   } else if (raw.kind === 'tool') {
+    const toolCallId = textValue(raw.toolCallId, 500)
+    if (!toolCallId.trim()) {
+      throw new Error('Annotation input: tool call id is required')
+    }
     location = {
       kind: 'tool',
       conversationId,
       entryId: positiveInteger(raw.entryId),
-      toolCallId: textValue(raw.toolCallId, 500),
+      toolCallId,
     }
     if (raw.imageIndex !== undefined) {
       location.imageIndex = positiveInteger(raw.imageIndex, 0)

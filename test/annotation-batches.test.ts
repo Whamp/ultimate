@@ -37,6 +37,9 @@ function source(entryId: number, content = 'Original source field'): AnnotationS
     fingerprint: annotationFingerprint(content),
   }
 }
+function forgedSnapshot(selected: AnnotationSource, content: string): AnnotationSource {
+  return { ...selected, content, fingerprint: annotationFingerprint(content) }
+}
 function batch(
   id: string,
   selected: AnnotationSource,
@@ -227,6 +230,192 @@ it('keeps plan/task ownership separate from the delivery target and retains orig
   )
 })
 
+it('rejects forged immutable snapshots and empty tool ids atomically, but accepts rendered Markdown excerpts', async () => {
+  const { server } = await fixture()
+  const assistantParts = [
+    '## Heading\n\n| Column | Rule |\n| --- | --- |\n| First | Keep |',
+    'UNSELECTED-SENTINEL',
+  ]
+  const toolParts = ['First tool block', 'Second tool block']
+  const ids = await server.harness.commit(async (tx) => {
+    const assistant = await tx.appendEntry(server.root.id, {
+      kind: 'pi.assistant',
+      data: {},
+      model: [fauxAssistantMessage(assistantParts.map((text) => ({ type: 'text', text })))],
+    })
+    const tool = await tx.appendEntry(server.root.id, {
+      kind: 'pi.tool-result',
+      data: {},
+      model: [
+        {
+          role: 'toolResult',
+          toolCallId: 'text-call',
+          toolName: 'read',
+          content: toolParts.map((text) => ({ type: 'text', text })),
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    })
+    return { assistant: assistant.id, tool: tool.id }
+  }, context)
+  const assistant = {
+    ...source(ids.assistant, assistantParts.join('\n')),
+    quote: 'Column\tRule\nFirst\tKeep',
+  }
+  const tool: AnnotationSource = {
+    ...source(ids.tool, toolParts.join('\n')),
+    location: { kind: 'tool', conversationId: 1, entryId: ids.tool, toolCallId: 'text-call' },
+  }
+  const invalid = [
+    {
+      source: forgedSnapshot(assistant, 'Fabricated assistant snapshot'),
+      error: 'snapshot does not match stored text',
+    },
+    {
+      source: forgedSnapshot(tool, 'Fabricated tool snapshot'),
+      error: 'snapshot does not match stored text',
+    },
+    {
+      source: forgedSnapshot(tool, toolParts.join('')),
+      error: 'snapshot does not match stored text',
+    },
+    { source: { ...assistant, fingerprint: 'wrong' }, error: 'source fingerprint mismatch' },
+    ...['', '   '].map((toolCallId) => ({
+      source: {
+        ...tool,
+        location: { kind: 'tool' as const, conversationId: 1, entryId: ids.tool, toolCallId },
+      },
+      error: 'tool call id is required',
+    })),
+  ]
+  const before = await history(server)
+  for (const [index, rejected] of invalid.entries()) {
+    const input = batch(`bad-snapshot-${index}`, assistant)
+    input.drafts.push({
+      ...input.drafts[0],
+      id: 'invalid-comment',
+      threadId: 'invalid-thread',
+      source: rejected.source,
+    })
+    const response = await accept(server, input)
+    expect(response.status).toBe(500)
+    expect(response.data.error).toContain(rejected.error)
+    expect(await history(server)).toEqual(before)
+  }
+  expect(
+    (await server.root.entries({}, 100, undefined, context)).items.some(
+      (entry) => entry.kind === 'conversation-annotations.batch',
+    ),
+  ).toBe(false)
+  const valid = batch('verified-snapshots', assistant)
+  valid.drafts.push({
+    ...valid.drafts[0],
+    id: 'tool-comment',
+    threadId: 'tool-thread',
+    source: tool,
+  })
+  expect((await accept(server, valid)).status).toBe(200)
+  const state = (await history(server))!
+  expect(state.threads['thread-one'].source.content).toBe(assistantParts.join('\n'))
+  expect(state.threads['tool-thread'].source.content).toBe(toolParts.join('\n'))
+  expect(assistant.content).not.toContain(assistant.quote)
+  expect(state.batches['verified-snapshots'].text).toContain(JSON.stringify(assistant.quote))
+  expect(state.batches['verified-snapshots'].text).not.toContain('UNSELECTED-SENTINEL')
+})
+
+it('validates plan field syntax by record kind without requiring live historical fields or notes', async () => {
+  const { server } = await fixture()
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Plan, server.root.id)).epics.E1 = {
+      key: 'E1',
+      title: 'Live epic',
+      body: 'Live body',
+      status: 'planning',
+      tasks: {
+        'E1.5': {
+          key: 'E1.5',
+          title: 'Live task',
+          description: 'Edited description',
+          role: 'worker',
+          deps: [],
+          status: 'todo',
+          notes: [],
+        },
+      },
+    }
+  }, context)
+  const planSource = (record: string, field: string): AnnotationSource => ({
+    ...source(1, 'Historical field snapshot'),
+    location: { kind: 'plan', conversationId: 1, document: 'ultimate.plan', record, field },
+  })
+  const invalid = [
+    ['E1', 'description'],
+    ['E1', 'notes:2026-10-16T17:00:00.000Z:0'],
+    ['E1.5', 'body'],
+    ['E1.5', 'notes:garbage:0'],
+    ['E1.5', 'notes:2026-02-31T17:00:00.000Z:0'],
+    ['E1.5', 'notes:2026-10-16T17:00:00.000Z:-1'],
+    ['E1.5', 'notes:2026-10-16T17:00:00.000Z:9007199254740992'],
+    ['E1.5', 'status'],
+    ['E1.5.2', 'title'],
+  ]
+  const before = await history(server)
+  for (const [index, [record, field]] of invalid.entries()) {
+    const input = batch(`bad-field-${index}`, planSource('E1', 'body'))
+    input.drafts.push({
+      ...input.drafts[0],
+      id: 'invalid-comment',
+      threadId: 'invalid-thread',
+      source: planSource(record, field),
+    })
+    const response = await accept(server, input)
+    expect(response.status).toBe(500)
+    expect(response.data.error).toContain('unsupported plan record or field')
+    expect(await history(server)).toEqual(before)
+  }
+  const fields = [
+    ['E1', 'title'],
+    ['E1', 'body'],
+    ['E1', 'verdict'],
+    ['E1.5', 'title'],
+    ['E1.5', 'description'],
+    ['E1.5', 'verdict'],
+    ['E1.5', 'notes:2026-10-16T17:00:00.000Z:0'],
+  ]
+  const valid = batch('historical-fields', planSource('E1', 'body'))
+  valid.drafts = fields.map(([record, field], index) => ({
+    ...valid.drafts[0],
+    id: `historical-comment-${index}`,
+    threadId: `historical-thread-${index}`,
+    source: planSource(record, field),
+  }))
+  expect((await accept(server, valid)).status).toBe(200)
+  const state = (await history(server))!
+  expect(Object.values(state.threads)).toHaveLength(fields.length)
+  expect(
+    Object.values(state.threads).every(
+      (thread) => thread.source.content === 'Historical field snapshot',
+    ),
+  ).toBe(true)
+  expect(
+    (
+      await accept(server, {
+        ...valid,
+        id: 'historical-revisit',
+        drafts: valid.drafts.map((draft, index) => ({
+          ...draft,
+          id: `revisit-comment-${index}`,
+          revision: 1,
+        })),
+      })
+    ).status,
+  ).toBe(200)
+  expect(
+    Object.values((await history(server))!.threads).every((thread) => thread.revision === 2),
+  ).toBe(true)
+})
+
 it('rejects forged source owners and includes actual stored image bytes rather than browser stand-ins', async () => {
   const { server } = await fixture()
   const imageData =
@@ -252,7 +441,8 @@ it('rejects forged source owners and includes actual stored image bytes rather t
     context,
   )
   const imageSource: AnnotationSource = {
-    ...source(resultId),
+    ...source(resultId, ''),
+    quote: '[Whole stored image 1]',
     location: {
       kind: 'tool',
       conversationId: 1,

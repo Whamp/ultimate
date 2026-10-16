@@ -87,6 +87,12 @@ function targetOf(conversationId: number | undefined): ConversationId {
   return conversationId as ConversationId
 }
 
+function assertStoredSnapshot(source: AnnotationSource, storedText: string) {
+  if (source.content !== storedText) {
+    throw new Error('Annotation source: snapshot does not match stored text')
+  }
+}
+
 async function sourceImages(tx: Tx, host: ExtensionHost, source: AnnotationSource) {
   const location = source.location
   // SAFETY: source ids were validated at the action boundary; existence is checked below.
@@ -127,9 +133,14 @@ async function sourceImages(tx: Tx, host: ExtensionHost, source: AnnotationSourc
     throw new Error('Annotation source: entry provenance does not match its owner')
   }
   if (location.kind === 'entry') {
-    if (entry.model?.[0]?.role !== 'assistant') {
+    const message = entry.model?.[0]
+    if (message?.role !== 'assistant') {
       throw new Error('Annotation source: only agent entries are supported')
     }
+    assertStoredSnapshot(
+      source,
+      message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+    )
     return []
   }
   const result = entry.model?.find(
@@ -138,6 +149,10 @@ async function sourceImages(tx: Tx, host: ExtensionHost, source: AnnotationSourc
   if (!result || result.role !== 'toolResult') {
     throw new Error('Annotation source: stored tool result is unavailable')
   }
+  assertStoredSnapshot(
+    source,
+    result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+  )
   if (location.imageIndex === undefined) {
     return []
   }
