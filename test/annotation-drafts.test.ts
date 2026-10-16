@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import {
   annotationBreadcrumb,
   annotationExcerptKey,
@@ -13,6 +13,11 @@ import type {
 import {
   annotationDraftStorageKey,
   createAnnotationDraftStore,
+} from '../.ultimate/extensions/conversation-annotations/annotation-drafts.ts'
+
+import type {
+  AnnotationBatchTransport,
+  AnnotationDraftStorage,
 } from '../.ultimate/extensions/conversation-annotations/annotation-drafts.ts'
 
 const original: AnnotationSource = {
@@ -110,6 +115,66 @@ it('retries an uncertain send with the same immutable batch id/payload after rel
     expect(JSON.stringify(input)).toBe(attempted)
   })
   expect(restored.getSnapshot()).toEqual({ drafts: [], sending: false })
+})
+
+it.each(['{', '', '{"drafts":false}'])(
+  'blocks malformed saved drafts without throwing during reads or overwriting bytes (%j)',
+  async (saved) => {
+    const values = new Map([['pending', saved]])
+    const persistence = {
+      getItem: vi.fn<AnnotationDraftStorage['getItem']>((key) => values.get(key) ?? null),
+      setItem: vi.fn<AnnotationDraftStorage['setItem']>((key, value) => {
+        values.set(key, value)
+      }),
+    }
+    const transport = vi.fn<AnnotationBatchTransport>(async () => {
+      throw new Error('Must not send')
+    })
+    const store = createAnnotationDraftStore(persistence, 'pending')
+    const state = store.getSnapshot()
+    expect(state).toMatchObject({ drafts: [], blocked: true, sending: false })
+    expect(state.error).toContain('Restore browser data or storage access, then reload')
+    expect(store.getSnapshot()).toBe(state)
+    expect(() => store.edit([draft('one')])).toThrow('Editing and sending are blocked')
+    expect(() => store.reviewRejected({})).toThrow('Editing and sending are blocked')
+    await expect(
+      store.submit({ text: 'Keep ordinary draft', images: [] }, transport),
+    ).rejects.toThrow('Editing and sending are blocked')
+    await expect(store.retry(transport)).rejects.toThrow('Editing and sending are blocked')
+    expect(persistence.getItem).toHaveBeenCalledTimes(1)
+    expect(persistence.setItem).not.toHaveBeenCalled()
+    expect(transport).not.toHaveBeenCalled()
+    expect(values.get('pending')).toBe(saved)
+    expect(store.getSnapshot()).toBe(state)
+    values.set('pending', JSON.stringify({ drafts: [draft('restored')] }))
+    expect(store.getSnapshot()).toBe(state)
+    expect(createAnnotationDraftStore(persistence, 'pending').getSnapshot().drafts).toEqual([
+      draft('restored'),
+    ])
+  },
+)
+
+it('keeps unavailable initial storage reads blocked and stable until reload, without writes or transport', async () => {
+  const persistence = {
+    getItem: vi.fn<AnnotationDraftStorage['getItem']>(() => {
+      throw new Error('Storage access denied')
+    }),
+    setItem: vi.fn<AnnotationDraftStorage['setItem']>(),
+  }
+  const store = createAnnotationDraftStore(persistence, 'pending')
+  const state = store.getSnapshot()
+  const transport = vi.fn<AnnotationBatchTransport>(async () => {
+    throw new Error('Must not send')
+  })
+  expect(state.blocked).toBe(true)
+  expect(() => store.edit([])).toThrow('Restore browser data or storage access, then reload')
+  await expect(store.submit({ text: '', images: [] }, transport)).rejects.toThrow(
+    'Editing and sending are blocked',
+  )
+  expect(store.getSnapshot()).toBe(state)
+  expect(persistence.getItem).toHaveBeenCalledTimes(1)
+  expect(persistence.setItem).not.toHaveBeenCalled()
+  expect(transport).not.toHaveBeenCalled()
 })
 
 it('does not pretend draft storage succeeded when browser storage fails', () => {

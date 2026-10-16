@@ -68,7 +68,13 @@ function PendingCards({ conversationId }: { conversationId: number }) {
   const outstanding = Object.values(history?.batches ?? {}).filter(
     (batch) => batch.status !== 'delivered',
   )
-  if (!pending.drafts.length && !pending.frozen && !outstanding.length && !error) {
+  if (
+    !pending.drafts.length &&
+    !pending.frozen &&
+    !outstanding.length &&
+    !error &&
+    !pending.error
+  ) {
     return null
   }
   return (
@@ -78,8 +84,10 @@ function PendingCards({ conversationId }: { conversationId: number }) {
     >
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <MessageSquareIcon className="size-3 text-brand" />
-        Annotations · {pending.drafts.length} pending
-        <span className="ml-auto text-[10px]">Send once with the normal send button</span>
+        Annotations · {pending.blocked ? 'drafts unavailable' : `${pending.drafts.length} pending`}
+        {!pending.blocked && (
+          <span className="ml-auto text-[10px]">Send once with the normal send button</span>
+        )}
       </div>
       <div className="annotation-pending-stack max-h-72 space-y-2 overflow-y-auto">
         {pending.drafts.map((draft) => (
@@ -215,7 +223,8 @@ function PendingCards({ conversationId }: { conversationId: number }) {
         className="text-[10px] text-muted-foreground/70"
         title="Pending drafts use localStorage scoped by this project and target conversation. They survive reload on this browser, not cleared site data or another browser. Submitted history is durable on the server."
       >
-        Drafts saved in this browser · submitted history saved on the server
+        {pending.blocked ? 'Saved browser data left unchanged' : 'Drafts saved in this browser'} ·
+        submitted history saved on the server
       </div>
     </div>
   )

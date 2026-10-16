@@ -4,6 +4,11 @@ import type { ComposerSubmissionInput } from '@/sdk'
 import { annotationDraftStorageKey, createAnnotationDraftStore } from './annotation-drafts.ts'
 import type { AnnotationBatchInput } from './annotation-domain.ts'
 
+// Defer even the localStorage property access to the store's guarded initial read.
+const browserStorage = {
+  getItem: (key: string) => localStorage.getItem(key),
+  setItem: (key: string, value: string) => localStorage.setItem(key, value),
+}
 const stores = new Map<string, ReturnType<typeof createAnnotationDraftStore>>()
 const listeners = new Set<() => void>()
 
@@ -12,7 +17,7 @@ export function annotationDraftStore(conversationId: number) {
   const key = annotationDraftStorageKey(getState().system?.project.root ?? '', conversationId)
   let store = stores.get(key)
   if (!store) {
-    store = createAnnotationDraftStore(localStorage, key)
+    store = createAnnotationDraftStore(browserStorage, key)
     store.subscribe(() => {
       for (const listener of listeners) {
         listener()
@@ -43,7 +48,7 @@ export const annotationComposer = {
   },
   pending(conversationId: number) {
     const state = annotationDraftStore(conversationId).getSnapshot()
-    return state.drafts.length > 0 || !!state.frozen
+    return state.drafts.length > 0 || !!state.frozen || !!state.blocked
   },
   async submit(input: ComposerSubmissionInput) {
     await annotationDraftStore(input.conversationId).submit(input, (batch) =>

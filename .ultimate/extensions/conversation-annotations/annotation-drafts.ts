@@ -7,6 +7,7 @@ export interface AnnotationPendingState {
   drafts: AnnotationDraft[]
   frozen?: AnnotationBatchInput
   error?: string
+  blocked?: boolean
   sending: boolean
 }
 
@@ -21,7 +22,7 @@ export type AnnotationBatchTransport = (input: AnnotationBatchInput) => Promise<
 
 /** Restore validated pending drafts; malformed storage is surfaced rather than silently discarded. */
 export function restoreAnnotationDrafts(value: string | null): AnnotationPendingState {
-  if (!value) {
+  if (value === null) {
     return { drafts: [], sending: false }
   }
   const parsed: JsonValue = JSON.parse(value)
@@ -43,11 +44,36 @@ export function restoreAnnotationDrafts(value: string | null): AnnotationPending
   return state
 }
 
+/** A failed read stays blocked until browser data/storage access is restored and the page reloads. */
+function loadAnnotationDrafts(
+  storage: AnnotationDraftStorage,
+  key: string,
+): AnnotationPendingState {
+  try {
+    return restoreAnnotationDrafts(storage.getItem(key))
+  } catch {
+    // Preserve the original bytes; a blocked composer must not fall back to plain submission.
+    return {
+      drafts: [],
+      sending: false,
+      blocked: true,
+      error:
+        'Annotation drafts could not be read or validated. Restore browser data or storage access, then reload. Saved data was not changed. Editing and sending are blocked.',
+    }
+  }
+}
+
 /** Pending store scoped by project and target conversation. Storage is written before notifying React or sending. */
 export function createAnnotationDraftStore(storage: AnnotationDraftStorage, key: string) {
-  let state = restoreAnnotationDrafts(storage.getItem(key))
+  let state = loadAnnotationDrafts(storage, key)
+  const assertWritable = () => {
+    if (state.blocked) {
+      throw new Error(state.error)
+    }
+  }
   const listeners = new Set<() => void>()
   const update = (next: AnnotationPendingState) => {
+    assertWritable()
     storage.setItem(key, JSON.stringify({ drafts: next.drafts, frozen: next.frozen }))
     state = next
     for (const listener of listeners) {
@@ -63,6 +89,7 @@ export function createAnnotationDraftStore(storage: AnnotationDraftStorage, key:
   }
   const edit = (drafts: AnnotationDraft[]) => update({ ...state, drafts })
   const deliver = async (transport: AnnotationBatchTransport) => {
+    assertWritable()
     const frozen = state.frozen
     if (!frozen || state.sending) {
       throw new Error('Annotation batch: no retryable batch or a send is already active')
@@ -99,6 +126,7 @@ export function createAnnotationDraftStore(storage: AnnotationDraftStorage, key:
     },
     transport: AnnotationBatchTransport,
   ) => {
+    assertWritable()
     if (state.frozen) {
       if (
         state.frozen.text !== input.text ||
