@@ -1,8 +1,9 @@
+Adds `~/.agents/skills` to the agent's `skills` system prompt section.
+
 # Shared skills (optional)
 
-Adds `~/.agents/skills` to the agent's `skills` system prompt section. This folder is
-an optional distribution artifact, not an active project extension. Nothing is
-loaded until you install it.
+This folder is an optional distribution artifact, not an active project extension.
+Nothing is loaded until you install it.
 
 ## Install and control
 

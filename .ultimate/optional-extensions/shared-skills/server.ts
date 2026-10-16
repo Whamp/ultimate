@@ -32,7 +32,9 @@ export default function sharedSkills(
             ),
           )
           for (const message of diagnostics) {
-            if (!previousDiagnostics.has(message)) host.notice(message)
+            if (!previousDiagnostics.has(message)) {
+              host.notice(message)
+            }
           }
           previousDiagnostics = diagnostics
           // Merge before filtering: an existing user-only skill must also hide a shared namesake.

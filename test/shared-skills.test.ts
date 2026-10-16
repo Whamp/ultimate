@@ -20,7 +20,9 @@ import { fauxServer, temp, until } from './helpers.ts'
 
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
-  for (const close of cleanups.splice(0).toReversed()) await close()
+  for (const close of cleanups.splice(0).toReversed()) {
+    await close()
+  }
 })
 
 async function writeSkill(directory: string, name: string, description: string, userOnly = false) {
@@ -73,7 +75,9 @@ async function fixture() {
   async function render(envCwd?: string) {
     const agent = await root.agent(context)
     const skillsSection = agent.sections.find((candidate) => candidate.key === 'skills')
-    if (!skillsSection) throw new Error('Shared skills test: skills section missing')
+    if (!skillsSection) {
+      throw new Error('Shared skills test: skills section missing')
+    }
     return skillsSection.render(
       {
         conversationId: root.id,
@@ -194,7 +198,9 @@ it.each(['environment', 'agent', 'project'])(
     const envCwd = join(f.home, 'env-worktree')
     const cwd = source === 'environment' ? envCwd : source === 'agent' ? agentCwd : f.projectRoot
     const path = await writeSkill(join(cwd, 'skills'), 'cwd-only', 'Working directory skill')
-    if (source !== 'project') await f.root.configure({ cwd: agentCwd }, context)
+    if (source !== 'project') {
+      await f.root.configure({ cwd: agentCwd }, context)
+    }
     f.registry.install(f.extension)
     expect(await f.render(source === 'environment' ? envCwd : undefined)).toContain(
       `<location>${path}</location>`,
@@ -233,7 +239,9 @@ it('loads the copied user facet with the real prompt and applies disable/re-enab
   async function render() {
     const agent = await server.root.agent(context)
     const skillsSection = agent.sections.find((candidate) => candidate.key === 'skills')
-    if (!skillsSection) throw new Error('Shared skills test: real prompt skills section missing')
+    if (!skillsSection) {
+      throw new Error('Shared skills test: real prompt skills section missing')
+    }
     return skillsSection.render(
       { conversationId: server.root.id, agent, env: undefined, shown: {}, read: server.harness },
       context,
