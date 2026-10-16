@@ -20,6 +20,8 @@
     "web/src",
     "extensions/**/*.tsx",
     ".ultimate/extensions/**/*.tsx",
+    ".ultimate/extensions/conversation-annotations/annotation-domain.ts",
+    ".ultimate/extensions/conversation-annotations/annotation-drafts.ts",
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
     "extensions/phase/types.ts",
