@@ -28,6 +28,17 @@ your branch. Apps are surfaces beside the conversation: switch with the ULTIMATE
 one keeps serving. Conversations, tool calls, and subagents reach SQLite before they show, so a restart or a crash
 resumes the run where it was.
 
+## Workspace setup and checks
+
+`.ultimate/settings.json` installs workspace dependencies and runs lander checks through
+`npm exec --yes --package=pnpm@11.8.0 -- pnpm`. The version matches `package.json`'s `packageManager`.
+This avoids the machine's plain `pnpm` shim, which can fail in the server environment. It does not install or
+change global tools. Keep both version pins in sync when updating pnpm.
+
+New workspaces run `install --frozen-lockfile --prefer-offline`. The lander runs `check` first, then `test`,
+`test:e2e`, and `eval` in parallel. The npm launcher needs network access if its pinned pnpm package is not cached;
+`--prefer-offline` applies to dependency installation, not to the launcher.
+
 ## Read more
 
 `README.md` to start, `AGENTS.md` for the reload layers and the rules, `extensions/README.md` to write extensions.
