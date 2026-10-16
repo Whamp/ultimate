@@ -74,7 +74,10 @@ export function createAnnotationDraftStore(storage: AnnotationDraftStorage, key:
   const listeners = new Set<() => void>()
   const update = (next: AnnotationPendingState) => {
     assertWritable()
-    storage.setItem(key, JSON.stringify({ drafts: next.drafts, frozen: next.frozen }))
+    const saved = JSON.stringify({ drafts: next.drafts, frozen: next.frozen })
+    // Every write must pass the same draft/batch decoders used after reload, before changing storage or state.
+    restoreAnnotationDrafts(saved)
+    storage.setItem(key, saved)
     state = next
     for (const listener of listeners) {
       listener()

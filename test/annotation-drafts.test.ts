@@ -117,6 +117,107 @@ it('retries an uncertain send with the same immutable batch id/payload after rel
   expect(restored.getSnapshot()).toEqual({ drafts: [], sending: false })
 })
 
+it.each([
+  { label: 'comment', invalid: { ...draft('bad'), text: 'x'.repeat(20001) } },
+  {
+    label: 'source snapshot',
+    invalid: {
+      ...draft('bad'),
+      source: {
+        ...original,
+        content: 'x'.repeat(100001),
+        fingerprint: annotationFingerprint('x'.repeat(100001)),
+      },
+    },
+  },
+])(
+  'rejects oversized $label edits before any write; prior drafts survive reload',
+  ({ invalid }) => {
+    const persistence = storage()
+    const store = createAnnotationDraftStore(persistence, 'pending')
+    store.edit([draft('one')])
+    const saved = persistence.getItem('pending')
+    const previous = store.getSnapshot()
+    const writes = vi.spyOn(persistence, 'setItem')
+    expect(() => store.edit([invalid])).toThrow('invalid text or length')
+    expect(writes).not.toHaveBeenCalled()
+    expect(persistence.getItem('pending')).toBe(saved)
+    expect(store.getSnapshot()).toBe(previous)
+    expect(createAnnotationDraftStore(persistence, 'pending').getSnapshot()).toEqual({
+      drafts: [draft('one')],
+      sending: false,
+    })
+  },
+)
+
+it.each([
+  {
+    label: 'general text',
+    input: { text: 'x'.repeat(50001), images: [] },
+    error: 'invalid text or length',
+  },
+  {
+    label: 'image count',
+    input: {
+      text: '',
+      images: Array.from({ length: 11 }, () => ({ mimeType: 'image/png', data: 'AAAA' })),
+    },
+    error: 'invalid images',
+  },
+  {
+    label: 'image data',
+    input: { text: '', images: [{ mimeType: 'image/png', data: 'A'.repeat(3000001) }] },
+    error: 'invalid text or length',
+  },
+])(
+  'rejects oversized $label before persisting a frozen batch or starting transport',
+  async ({ input, error }) => {
+    const persistence = storage()
+    const store = createAnnotationDraftStore(persistence, 'pending')
+    store.edit([draft('one')])
+    const saved = persistence.getItem('pending')
+    const previous = store.getSnapshot()
+    const writes = vi.spyOn(persistence, 'setItem')
+    const transport = vi.fn<AnnotationBatchTransport>(async () => {
+      throw new Error('Must not send')
+    })
+    await expect(store.submit(input, transport)).rejects.toThrow(error)
+    expect(writes).not.toHaveBeenCalled()
+    expect(transport).not.toHaveBeenCalled()
+    expect(persistence.getItem('pending')).toBe(saved)
+    expect(store.getSnapshot()).toBe(previous)
+    expect(createAnnotationDraftStore(persistence, 'pending').getSnapshot()).toEqual({
+      drafts: [draft('one')],
+      sending: false,
+    })
+  },
+)
+
+it('retains valid limit-sized drafts and frozen text exactly through reload', async () => {
+  const persistence = storage()
+  const store = createAnnotationDraftStore(persistence, 'pending')
+  const content = 'x'.repeat(100000)
+  const accepted = {
+    ...draft('one'),
+    text: 'x'.repeat(20000),
+    source: { ...original, content, fingerprint: annotationFingerprint(content) },
+  }
+  store.edit([accepted])
+  const input = { text: 'x'.repeat(50000), images: [] }
+  await expect(
+    store.submit(input, async (batch) => {
+      expect(batch.drafts).toEqual([accepted])
+      expect(batch.text).toBe(input.text)
+      throw new Error('Simulated response loss')
+    }),
+  ).rejects.toThrow('Simulated response loss')
+  const restored = createAnnotationDraftStore(persistence, 'pending').getSnapshot()
+  expect(restored.blocked).toBeUndefined()
+  expect(restored.drafts).toEqual([accepted])
+  expect(restored.frozen).toEqual(store.getSnapshot().frozen)
+  expect(restored.frozen?.text).toBe(input.text)
+})
+
 it.each(['{', '', '{"drafts":false}'])(
   'blocks malformed saved drafts without throwing during reads or overwriting bytes (%j)',
   async (saved) => {
