@@ -10,6 +10,7 @@ export type SlotName =
   | 'statusline.left'
   | 'statusline.right'
   | 'composer.toolbar'
+  | 'composer.attachments'
   | 'composer.status'
   | 'conversation.overlay'
   | 'overlay'
@@ -151,6 +152,22 @@ export interface ConversationDraft {
   thinkingLevel?: ConfigureRequest['thinkingLevel']
 }
 
+/** One explicit composer send, including ordinary text and image attachments. */
+export interface ComposerSubmissionInput {
+  conversationId: number
+  text: string
+  images: { data: string; mimeType: string }[]
+  whenBusy?: 'steer' | 'followUp'
+}
+
+/** A pending composer contribution owns the whole send; freeze its pending state before the first await. */
+export interface ComposerSubmissionContribution {
+  subscribe(listener: () => void): () => void
+  pending(conversationId: number): boolean
+  /** Resolve only after durable acceptance. Reject to keep the ordinary draft for retry. */
+  submit(input: ComposerSubmissionInput): Promise<void>
+}
+
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -161,6 +178,8 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
+  /** Pending content participates in the normal composer Send, including annotation-only sends. */
+  composer?: ComposerSubmissionContribution
   /** Starts a new conversation; the last contribution in discovery order wins. */
   start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */

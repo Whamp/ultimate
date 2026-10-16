@@ -1,7 +1,7 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { KeyboardEvent } from 'react'
 import {
@@ -18,7 +18,8 @@ import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { conversationStarter, inboxRenderer } from '../sdk/registry.ts'
+import { composerSubmissions, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
+import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
 
@@ -200,7 +201,15 @@ function ConversationComposer({
   const defaults = useNewConversationConfiguration(isNew, source)
   const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
-  const start = conversationStarter(useExtensions())
+  const extensions = useExtensions()
+  const start = conversationStarter(extensions)
+  const transports = useMemo(() => composerSubmissions(extensions), [extensions])
+  const submissionId = isNew ? undefined : id
+  const submissions = useMemo(
+    () => createComposerSubmissionStore(transports, submissionId),
+    [transports, submissionId],
+  )
+  const pendingSubmissions = useSyncExternalStore(submissions.subscribe, submissions.getSnapshot)
   // New and each branch point keep their own draft.
   const draftId = isNew
     ? point?.root
@@ -234,14 +243,16 @@ function ConversationComposer({
     else localStorage.removeItem(key)
   }
   const blocked =
-    isNew && !start
-      ? 'No extension provides a conversation starter.'
-      : loading || (isNew && !defaults.available)
-        ? undefined
-        : isNew && defaults.error
-          ? errorMessage(defaults.error)
-          : blockedBy(isNew ? defaults.configuration : agent, models)
-  const empty = !text.trim() && images.length === 0
+    pendingSubmissions > 1
+      ? composerSubmissionConflict
+      : isNew && !start
+        ? 'No extension provides a conversation starter.'
+        : loading || (isNew && !defaults.available)
+          ? undefined
+          : isNew && defaults.error
+            ? errorMessage(defaults.error)
+            : blockedBy(isNew ? defaults.configuration : agent, models)
+  const empty = !text.trim() && images.length === 0 && pendingSubmissions === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
     if (
@@ -272,8 +283,18 @@ function ConversationComposer({
               : {}),
           })
         ).id
-      } else {
-        await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
+      } else if (id !== undefined) {
+        await submissions.submit(
+          {
+            conversationId: id,
+            text: submitted.text.trim(),
+            images: submitted.images,
+            whenBusy: busy ? (whenBusy ?? 'steer') : undefined,
+          },
+          async (input) => {
+            await api.submit(input.text, input.whenBusy, input.conversationId, input.images)
+          },
+        )
       }
       const stored = key ? (localStorage.getItem(key) ?? '') : ''
       if (key && stored === submitted.text && draft.get().revision === submitted.revision)
@@ -313,6 +334,7 @@ function ConversationComposer({
             void send()
           }}
         >
+          <Slot name="composer.attachments" />
           <ImagePreviews
             images={images}
             disabled={loading || sending || reading}

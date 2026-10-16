@@ -13,6 +13,7 @@ import {
   toolRenderers,
   messageItems,
   conversationStarter,
+  composerSubmissions,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -162,6 +163,8 @@ describe('web extension registry', () => {
       [{ slots: { overlay: { order: 1 } } }, /^slots must/],
       [{ tools: { bash: 'Bash' } }, /^tools must be an object/],
       [{ entries: [Good] }, /^entries must be an object/],
+      [{ composer: {} }, /^composer must be an object/],
+      [{ composer: { subscribe() {}, pending() {}, submit: 'send' } }, /^composer must/],
       [{ documents: {} }, /^documents must be an array of \{ kind, title, icon\?, component \}/],
       [{ documents: [{ kind: 'x', title: 'X' }] }, /^documents must/],
       [{ documents: [{ kind: 1, title: 'X', component: Good }] }, /^documents must/],
@@ -188,6 +191,33 @@ describe('web extension registry', () => {
     expect(records[0].error).toMatch(/^panels must/)
     expect(surfaceItems(records)).toEqual([])
     expect(panelItems(records)).toEqual([])
+  })
+
+  it('keeps every composer transport and attachment slot in discovery order', async () => {
+    const First = component('first')
+    const contribution = {
+      subscribe: () => () => {},
+      pending: () => true,
+      submit: async () => {},
+    }
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () =>
+        module({
+          composer: contribution,
+          slots: { 'composer.attachments': First },
+        }),
+      [path('b')]: async () => module({ composer: contribution }),
+      [path('unrelated')]: async () => module({}),
+    })
+    expect(composerSubmissions(registry.getSnapshot())).toEqual([
+      { extension: 'a', contribution },
+      { extension: 'b', contribution },
+    ])
+    expect(
+      slotItems(registry.getSnapshot(), 'composer.attachments').map((item) => item.component),
+    ).toEqual([First])
+    expect(composerSubmissions([])).toEqual([])
   })
 
   it('resolves command ids like surface ids: a later facet wins, in the place of the first', async () => {

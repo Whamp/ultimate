@@ -32,12 +32,13 @@ import {
   useUiState,
   useUltimate,
 } from '@/sdk'
-import type { ConversationSummary, ToolCallView } from '@/sdk'
+import type { ConversationSummary, DocumentProps, ToolCallView } from '@/sdk'
 import { stateLabel, useWorkspaces } from '../workspaces/data.tsx'
 import type { WorkspaceInfo } from '../workspaces/types.ts'
 import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './chip.tsx'
 import type { TaskLink } from './chip.tsx'
 import { finished, number, pillOf } from './progress.tsx'
+import { planSourceAttributes } from './sources.tsx'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
 type Task = {
@@ -82,7 +83,15 @@ function StatusChip({ status }: { status: string }) {
 
 const time = (at: string) => formatTime(at)
 
-function Note({ note, clamp }: { note: Task['notes'][number]; clamp?: boolean }) {
+function Note({
+  note,
+  clamp,
+  source,
+}: {
+  note: Task['notes'][number]
+  clamp?: boolean
+  source: ReturnType<typeof planSourceAttributes>
+}) {
   return (
     <p className="flex min-w-0 gap-1.5 font-sans text-[12px] leading-snug text-muted-foreground">
       <span
@@ -91,7 +100,10 @@ function Note({ note, clamp }: { note: Task['notes'][number]; clamp?: boolean })
       >
         {time(note.at)}
       </span>
-      <span className={cn('min-w-0 break-words whitespace-pre-wrap', clamp && 'line-clamp-2')}>
+      <span
+        className={cn('min-w-0 break-words whitespace-pre-wrap', clamp && 'line-clamp-2')}
+        {...source}
+      >
         {note.text}
       </span>
     </p>
@@ -278,6 +290,7 @@ function TaskRow({
             task.status === 'canceled' && 'text-muted-foreground line-through',
           )}
           title={task.title}
+          {...planSourceAttributes(coordinator, task, 'title', task.title)}
         >
           {task.title}
         </span>
@@ -316,12 +329,17 @@ function TaskRow({
             <div className="pb-1 font-mono text-[10px] tracking-wider text-muted-foreground/80 uppercase">
               Verdict
             </div>
-            <MessageResponse>{task.verdict}</MessageResponse>
+            <div {...planSourceAttributes(coordinator, task, 'verdict', task.verdict)}>
+              <MessageResponse>{task.verdict}</MessageResponse>
+            </div>
           </div>
         )}
         {open ? (
           <div className="space-y-2 pt-1">
-            <div className="text-[12.5px] text-foreground/90">
+            <div
+              className="text-[12.5px] text-foreground/90"
+              {...planSourceAttributes(coordinator, task, 'description', task.description)}
+            >
               <MessageResponse>{task.description}</MessageResponse>
             </div>
             {task.notes.length > 0 && (
@@ -330,7 +348,16 @@ function TaskRow({
                   Notes
                 </div>
                 {task.notes.map((note, index) => (
-                  <Note key={index} note={note} />
+                  <Note
+                    key={index}
+                    note={note}
+                    source={planSourceAttributes(
+                      coordinator,
+                      task,
+                      `notes:${note.at}:${index}`,
+                      note.text,
+                    )}
+                  />
                 ))}
               </div>
             )}
@@ -339,7 +366,16 @@ function TaskRow({
           last && (
             <div className="flex min-w-0 items-start gap-1.5">
               <div className="min-w-0 flex-1">
-                <Note clamp note={last} />
+                <Note
+                  clamp
+                  note={last}
+                  source={planSourceAttributes(
+                    coordinator,
+                    task,
+                    `notes:${last.at}:${task.notes.length - 1}`,
+                    last.text,
+                  )}
+                />
               </div>
               {task.notes.length > 1 && (
                 <button
@@ -386,13 +422,20 @@ function EpicCard({
         <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-1.5 px-3 py-2 text-left hover:bg-accent/40">
           <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-data-[state=open]/epic:rotate-90" />
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{epic.key}</span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium" title={epic.title}>
+          <span
+            className="min-w-0 flex-1 truncate text-[13px] font-medium"
+            title={epic.title}
+            {...planSourceAttributes(coordinator, epic, 'title', epic.title)}
+          >
             {epic.title}
           </span>
           <StatusChip status={epic.status} />
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mx-3 mb-2 rounded-md border border-border/70 bg-card/50 px-3 py-2 text-[12.5px]">
+          <div
+            className="mx-3 mb-2 rounded-md border border-border/70 bg-card/50 px-3 py-2 text-[12.5px]"
+            {...planSourceAttributes(coordinator, epic, 'body', epic.body)}
+          >
             <MessageResponse>{epic.body}</MessageResponse>
           </div>
         </CollapsibleContent>
@@ -412,7 +455,9 @@ function EpicCard({
           >
             Verdict
           </div>
-          <MessageResponse>{epic.verdict}</MessageResponse>
+          <div {...planSourceAttributes(coordinator, epic, 'verdict', epic.verdict)}>
+            <MessageResponse>{epic.verdict}</MessageResponse>
+          </div>
         </div>
       )}
       <div className="flex items-center px-3 pb-1 font-mono text-[10px] tracking-wider text-muted-foreground/80 uppercase">
@@ -488,6 +533,13 @@ export function PlanBody({
       )}
     </>
   )
+}
+
+/** Documents and the plan popover share the same field rendering and source identity. */
+function PlanDocument({ value, conversationId }: DocumentProps) {
+  // SAFETY: ultimate.plan is written by the plan extension with the Plan schema above.
+  const plan = value as Plan
+  return <PlanBody coordinator={conversationId} focus={undefined} plan={plan} />
 }
 
 const pill =
@@ -823,5 +875,8 @@ function PlanCall({ call }: { call: ToolCallView }) {
 
 export default defineWebExtension({
   tools: { plan: PlanCall },
+  documents: [
+    { kind: 'ultimate.plan', title: 'Plan', icon: ClipboardListIcon, component: PlanDocument },
+  ],
   slots: { overlay: PlanOverlay },
 })

@@ -181,7 +181,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, composer, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
@@ -199,6 +199,7 @@ Components mounted in named places of the shell, on every surface that renders t
 | `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                          |
 | `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                              |
 | `composer.toolbar`     | Left of the composer's footer, beside the send button (`<Conversation />`)                |
+| `composer.attachments` | Inside the composer form, above image previews and the textarea                           |
 | `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)  |
 | `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0` |
 | `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects          |
@@ -219,6 +220,30 @@ default's (models `defaultConfiguration`); choices are passed to lineage and rem
 An optional `isolated` prop forces that creation mode without changing the saved preference; `useComposer().isolated`
 lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
 through `useCommands()`; a message-action component can pass its entry's id to a command.
+
+### Composer submissions
+
+A `composer` contribution adds pending content to the normal conversation Send. Its contract is
+`ComposerSubmissionContribution` from `@/sdk`:
+
+```ts
+interface ComposerSubmissionContribution {
+  subscribe(listener: () => void): () => void
+  pending(conversationId: number): boolean
+  submit(input: ComposerSubmissionInput): Promise<void>
+}
+```
+
+`input` contains `{ conversationId, text, images, whenBusy? }`; `whenBusy` is `steer` or `followUp` while the agent
+works. Subscribe must notify whenever pending content changes and return a disposer. Pending content enables Send
+even without text or images. The new-conversation composer does not use these transports.
+
+On explicit Send, core invokes the sole pending transport instead of `api.submit`. The extension must freeze its
+pending batch synchronously before its first await, deliver the general text and images along with its content, and
+resolve only after durable acceptance. Reject to retain the ordinary draft and display the failure; core does not
+fall back to a plain send. More than one pending transport blocks Send visibly. Core clears only unchanged submitted
+draft revisions after acceptance. Use `composer.attachments` for pending cards, with `useComposer().target` to hide
+conversation-only cards on a new composer. Draft edits and attachment rendering must never submit messages.
 
 ### Panels
 

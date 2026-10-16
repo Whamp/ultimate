@@ -3,6 +3,7 @@ import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   CommandContribution,
+  ComposerSubmissionContribution,
   Contribution,
   DocumentContribution,
   EntryRenderer,
@@ -45,6 +46,11 @@ export interface SurfaceItem extends SurfaceContribution {
 }
 export interface CommandItem extends CommandContribution {
   extension: string
+}
+/** A composer transport together with its owning extension, in discovery order. */
+export interface ComposerSubmissionItem {
+  extension: string
+  contribution: ComposerSubmissionContribution
 }
 export interface DocumentItem extends DocumentContribution {
   extension: string
@@ -116,6 +122,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
+  composer: [
+    fields({ subscribe: isFunction, pending: isFunction, submit: isFunction }),
+    'an object of { subscribe, pending, submit } functions',
+  ],
   start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
@@ -312,6 +322,13 @@ export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {
       (extension?.panels ?? []).map((panel) => ({ ...panel, extension: name, version })),
     )
     .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
+}
+
+/** Composer transports never override one another; conflicting pending transports block Send. */
+export function composerSubmissions(records: readonly ExtensionRecord[]): ComposerSubmissionItem[] {
+  return records.flatMap(({ name, extension }) =>
+    extension?.composer ? [{ extension: name, contribution: extension.composer }] : [],
+  )
 }
 
 /** The home surface: shown by default, and whenever the chosen surface cannot be. */
