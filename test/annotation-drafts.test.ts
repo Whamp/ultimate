@@ -218,7 +218,12 @@ it('retains valid limit-sized drafts and frozen text exactly through reload', as
   expect(restored.frozen?.text).toBe(input.text)
 })
 
-it.each(['{', '', '{"drafts":false}'])(
+it.each([
+  '{',
+  '',
+  '{"drafts":false}',
+  ...[null, false, 0, ''].map((frozen) => JSON.stringify({ drafts: [], frozen })),
+])(
   'blocks malformed saved drafts without throwing during reads or overwriting bytes (%j)',
   async (saved) => {
     const values = new Map([['pending', saved]])
@@ -254,6 +259,18 @@ it.each(['{', '', '{"drafts":false}'])(
     ])
   },
 )
+
+it('restores an omitted frozen field as healthy and editable', () => {
+  const persistence = storage()
+  persistence.setItem('pending', '{"drafts":[]}')
+  const store = createAnnotationDraftStore(persistence, 'pending')
+  expect(store.getSnapshot()).toEqual({ drafts: [], sending: false })
+  store.edit([draft('one')])
+  expect(createAnnotationDraftStore(persistence, 'pending').getSnapshot()).toEqual({
+    drafts: [draft('one')],
+    sending: false,
+  })
+})
 
 it('keeps unavailable initial storage reads blocked and stable until reload, without writes or transport', async () => {
   const persistence = {

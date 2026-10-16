@@ -38,7 +38,7 @@ export function restoreAnnotationDrafts(value: string | null): AnnotationPending
     drafts: parsed.drafts.map(parseAnnotationDraft),
     sending: false,
   }
-  if (parsed.frozen) {
+  if (parsed.frozen !== undefined) {
     state.frozen = parseAnnotationBatch(parsed.frozen)
   }
   return state
