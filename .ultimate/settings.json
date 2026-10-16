@@ -1,11 +1,20 @@
 {
   "isolates": {
     "worktree": {
-      "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
+      "setup": [
+        "npm exec --yes --package=pnpm@11.8.0 -- pnpm install --frozen-lockfile --prefer-offline"
+      ]
     }
   },
   "lander": {
-    "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e", "pnpm eval"]],
+    "checks": [
+      "npm exec --yes --package=pnpm@11.8.0 -- pnpm check",
+      [
+        "npm exec --yes --package=pnpm@11.8.0 -- pnpm test",
+        "npm exec --yes --package=pnpm@11.8.0 -- pnpm test:e2e",
+        "npm exec --yes --package=pnpm@11.8.0 -- pnpm eval"
+      ]
+    ],
     "push": "origin"
   }
 }
