@@ -230,6 +230,8 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   await mkdir(config)
   await writeFile(settings, JSON.stringify({ extensions: { disable: ['subagents'] } }))
   await until(async () => !(await tools(server)).includes('subagent'))
+  // Tools change before the completed reload publishes its build snapshot.
+  await until(() => server.host.build().id !== initialBuild)
   expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
   expect(server.host.build().id).not.toBe(initialBuild)
   expect(server.host.build().extensions.subagents).toBeUndefined()
@@ -238,6 +240,7 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   )
   await rm(settings)
   await until(async () => (await tools(server)).includes('subagent'))
+  await until(() => server.host.build().id === initialBuild)
   expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
   expect(server.host.build().id).toBe(initialBuild)
   const folder = join(config, 'extensions/local')
