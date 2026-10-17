@@ -1,7 +1,7 @@
 import { createServer, request as upstreamRequest } from 'node:http'
 import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { TransportProject } from './transport-contracts.ts'
+import type { TransportProject } from './types.ts'
 import { readFile } from 'node:fs/promises'
 
 /** Loopback-only routing experiment. No response rewriting, cookies, auth, or WebSocket proxy. */

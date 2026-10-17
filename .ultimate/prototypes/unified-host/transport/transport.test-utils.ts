@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { TestContext } from 'node:test'
 import { decodeTransportPreview } from './transport-boundary.js'
-import type { TransportPreview } from './transport-contracts.ts'
+import type { TransportPreview } from './types.ts'
 
 /** Starts the actual launcher entrypoint; test cleanup owns only this process and its temp home. */
 export async function launchTransportFixture(t: TestContext) {

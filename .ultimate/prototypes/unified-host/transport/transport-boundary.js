@@ -1,6 +1,6 @@
-/** @typedef {import('./transport-contracts.ts').TransportReady} TransportReady */
-/** @typedef {import('./transport-contracts.ts').TransportProject} TransportProject */
-/** @typedef {import('./transport-contracts.ts').TransportPreview} TransportPreview */
+/** @typedef {import('./types.ts').TransportReady} TransportReady */
+/** @typedef {import('./types.ts').TransportProject} TransportProject */
+/** @typedef {import('./types.ts').TransportPreview} TransportPreview */
 
 // TS-48 exception, limited to the JSON type guards in this file: untrusted HTTP and child
 // JSON have no runtime schema. Primitive checks are required to reject malformed IDs,

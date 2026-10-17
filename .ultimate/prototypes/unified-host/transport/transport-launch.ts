@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTransportGateway } from './transport-gateway.ts'
-import type { TransportProject } from './transport-contracts.ts'
+import type { TransportProject } from './types.ts'
 import { decodeTransportReady } from './transport-boundary.js'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))

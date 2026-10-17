@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { chromium } from 'playwright-core'
-import type { TransportProject } from './transport-contracts.ts'
+import type { TransportProject } from './types.ts'
 import { decodeTransportProjects } from './transport-boundary.js'
 
 const URL = process.argv[2]
