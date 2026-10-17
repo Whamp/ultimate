@@ -2,7 +2,7 @@ Annotate selected agent/tool text and plan/task fields, collect comments above t
 
 ## Use
 
-1. Select text in a stored agent response, stored tool result, or plan/task field. Click **Annotate** beside the selection.
+1. Select text in a stored agent response, stored tool result, or plan/task field. Tap or click **Annotate** beside the selection. On a phone, moving the selection handles updates the quote before you tap.
 2. Write beside the source and choose **Add to batch**. This does not send or interrupt the agent.
 3. Repeat, edit the pending cards, or remove them. Add optional general text/images in the normal composer.
 4. Use the normal Send, Steer, or Follow-up control once. The extension replaces plain submission only while this conversation has pending annotations.
@@ -36,7 +36,7 @@ The composer freezes the entire batch synchronously before its first await, incl
 - `annotation-drafts.ts`: local browser draft persistence, synchronous freezing and uncertain-send retry.
 - `annotation-client.tsx`: SDK composer transport and shared browser draft stores.
 - `annotation-sources.tsx`: stored-entry provenance and text/image selection without replacing core renderers.
-- `annotation-overlay.tsx`: beside-source editor and source-marker portals.
+- `annotation-overlay.tsx`: selection-change tracking, beside-source editor and source-marker portals. Pointer activation preserves the selected quote until click, including touch.
 - `annotation-cards.tsx`: editable composer cards and this extension's submitted-input cards.
 - `web.tsx`: project-local contributions.
 

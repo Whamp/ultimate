@@ -142,13 +142,13 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
       ],
     })
     const onSelection = (event: Event) => {
-      if (event.target instanceof Element && event.target.closest(ANNOTATION_EXCLUDED)) {
+      // Whole-table actions have no text range; do not clear them on their own mouseup.
+      if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
         return
       }
-      const selected = selectedAnnotationSource(window.getSelection())
-      const range = window.getSelection()?.rangeCount
-        ? window.getSelection()!.getRangeAt(0)
-        : undefined
+      const current = window.getSelection()
+      const selected = selectedAnnotationSource(current)
+      const range = current?.rangeCount ? current.getRangeAt(0) : undefined
       setSelection(
         selected && range ? { request: selected, rect: range.getBoundingClientRect() } : undefined,
       )
@@ -182,6 +182,7 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
       }
     }
     document.addEventListener('pointerdown', keepSourceOpen, true)
+    document.addEventListener('selectionchange', onSelection)
     document.addEventListener('mouseup', onSelection)
     document.addEventListener('keyup', onSelection)
     document.addEventListener('mouseover', onPointer)
@@ -190,6 +191,7 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
       alive.current = false
       observer.disconnect()
       document.removeEventListener('pointerdown', keepSourceOpen, true)
+      document.removeEventListener('selectionchange', onSelection)
       document.removeEventListener('mouseup', onSelection)
       document.removeEventListener('keyup', onSelection)
       document.removeEventListener('mouseover', onPointer)
@@ -223,7 +225,10 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
               left: Math.max(8, Math.min(selection.rect.left, window.innerWidth - 180)),
               top: Math.max(8, Math.min(selection.rect.bottom + 6, window.innerHeight - 42)),
             }}
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={(event) => {
+              // Keep the selected quote and this button intact until click, including on touch.
+              event.preventDefault()
+            }}
             onClick={() => {
               setEditor(selection.request)
               setSelection(undefined)
