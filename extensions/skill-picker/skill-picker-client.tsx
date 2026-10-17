@@ -7,7 +7,50 @@ export interface SkillPickerQuery extends ComposerSelection {
   query: string
 }
 
-/** Ignore shell/currency syntax, escaped dollars, emails and Markdown code spans. */
+// Scan only the draft through the caret: unfinished code must stay literal while typing.
+function inMarkdownCode(prefix: string): boolean {
+  let fence = ''
+  let inlineDelimiter = 0
+  let paragraph = false
+  let indentedCode = false
+  for (const line of prefix.split(/\r\n?|\n/)) {
+    if (fence) {
+      const closer = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1]
+      if (closer && closer[0] === fence[0] && closer.length >= fence.length) {
+        fence = ''
+      }
+      continue
+    }
+    if (/^[ \t]*$/.test(line)) {
+      paragraph = false
+      inlineDelimiter = 0
+      continue
+    }
+    // Indentation cannot interrupt an existing prose paragraph.
+    indentedCode = !paragraph && /^(?: {4}| {0,3}\t)/.test(line)
+    if (indentedCode) {
+      continue
+    }
+    const opener = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (opener && (opener[1][0] === '~' || !opener[2].includes('`'))) {
+      fence = opener[1]
+      paragraph = false
+      inlineDelimiter = 0
+      continue
+    }
+    paragraph = true
+    for (const ticks of line.matchAll(/(?<!\\)`+/g)) {
+      if (inlineDelimiter === 0) {
+        inlineDelimiter = ticks[0].length
+      } else if (inlineDelimiter === ticks[0].length) {
+        inlineDelimiter = 0
+      }
+    }
+  }
+  return fence !== '' || indentedCode || inlineDelimiter !== 0
+}
+
+/** Ignore shell/currency syntax, escaped dollars, emails and Markdown code. */
 export function findSkillQuery(
   text: string,
   selection: ComposerSelection,
@@ -23,12 +66,7 @@ export function findSkillQuery(
   const match = /(?:^|\s)\$([a-z][a-z0-9-]*|)$/.exec(prefix)
   if (!match || /[\w{(]/.test(text[selection.start] ?? '')) return null
   const start = selection.start - match[1].length - 1
-  let delimiter = 0
-  for (const ticks of text.slice(0, start).matchAll(/(?<!\\)`+/g)) {
-    if (delimiter === 0) delimiter = ticks[0].length
-    else if (delimiter === ticks[0].length) delimiter = 0
-  }
-  if (delimiter !== 0) return null
+  if (inMarkdownCode(prefix)) return null
   return { start, end: selection.end, query: match[1] }
 }
 

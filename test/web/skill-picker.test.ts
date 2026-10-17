@@ -44,6 +44,65 @@ describe('dollar skill trigger', () => {
     expect(queryAt(text)).toBeNull()
   })
 
+  it.each([
+    '~~~sh\n$cr',
+    '  ~~~sh\n$cr',
+    '~~~~~sh\n~~~\n$cr',
+    '`````sh\n```\n$cr',
+    '```sh\necho ```\n$cr',
+    '~~~sh\n```\n$cr',
+    '```sh\n~~~\n$cr',
+    '~~~sh\n~~~ not a closer\n$cr',
+    '```sh\n``` not a closer\n$cr',
+    '~~~sh\n    ~~~\n$cr',
+    '~~~sh\n~~~ $cr',
+    '```sh\n``` $cr',
+  ])('keeps fenced code literal until a valid matching closer: %s', (text) => {
+    expect(queryAt(text)).toBeNull()
+  })
+
+  it.each([
+    '~~~sh\n$HOME\n~~~\n$cr',
+    '```sh\n$HOME\n```\n$cr',
+    '~~~~~sh\n~~~\n~~~~~~\n$cr',
+    '`````sh\n```\n``````\n$cr',
+    '  ~~~sh\n`unmatched code tick\n   ~~~~ \t\n$cr',
+    '```sh\n`unmatched code tick\n```\n$cr',
+  ])('opens in prose after a valid fence closure: %s', (text) => {
+    expect(queryAt(text)).toEqual({ start: text.length - 3, end: text.length, query: 'cr' })
+  })
+
+  it.each([
+    '    $cr',
+    '\t$cr',
+    '  \t$cr',
+    'Prose\n\n    $cr',
+    '    shell command\n\n\t$cr',
+    '    ```\n    $cr',
+    '    ~~~\n    $cr',
+  ])('keeps indented code blocks literal: %s', (text) => {
+    expect(queryAt(text)).toBeNull()
+  })
+
+  it.each([
+    '   $cr',
+    'Prose\n    $cr',
+    'Prose\n\t$cr',
+    '    shell command\n$cr',
+    '\tshell command\n\n$cr',
+    '    `code tick\n\nUse $cr',
+    'Use ~~~ as punctuation $cr',
+    '`closed` $cr',
+    '``code ` tick`` $cr',
+    '\\`escaped $cr',
+  ])('opens in normal prose, outside code blocks and spans: %s', (text) => {
+    expect(queryAt(text)).toEqual({ start: text.length - 3, end: text.length, query: 'cr' })
+  })
+
+  it.each(['``code ` $cr', '`code `` $cr'])('keeps inline backtick spans literal: %s', (text) => {
+    expect(queryAt(text)).toBeNull()
+  })
+
   it('does not consume a selection or a partially traversed shell variable', () => {
     expect(findSkillQuery('$cr', { start: 1, end: 3 })).toBeNull()
     expect(queryAt('$HOME', 1)).toBeNull()
