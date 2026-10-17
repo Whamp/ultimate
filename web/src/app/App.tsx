@@ -13,6 +13,7 @@ import {
   useReady,
   useShownSurface,
   useStore,
+  useSystem,
 } from '../sdk/hooks.ts'
 import { HOME, surfaceItems } from '../sdk/registry.ts'
 import type { SurfaceItem } from '../sdk/registry.ts'
@@ -22,6 +23,7 @@ import { useShortcuts } from './keyboard.ts'
 import { CommandPalette } from './palette.tsx'
 import { Conversation, Header, StatusLine } from './primitives.tsx'
 import { SurfaceContext } from './surface.ts'
+import { TitleBar, projectTitle } from './titlebar.tsx'
 
 /** Records the surface on screen, for the window title, `useUltimate().surface`, and the agent's prompt. */
 function onScreen({ id, title }: { id: string; title: string }) {
@@ -40,6 +42,9 @@ function Frame() {
     </>
   )
 }
+
+/** An Ultimate shown inside another one's window, under that one's title bar, shows none of its own. */
+const embedded = window.top !== window
 
 /** The missing surface last reported, so it is reported once until it shows again. */
 let reported: string | undefined
@@ -107,19 +112,20 @@ function Surfaces({ surfaces }: { surfaces: readonly SurfaceItem[] }) {
   )
 }
 
-/** The window title: the shown conversation on Agent, the surface elsewhere; a dot while the agent works. */
+/**
+ * The window title: the project's folder first, so tabs of several projects tell apart, then the shown conversation on
+ * Agent or the surface elsewhere; a dot while the agent works.
+ */
 function useDocumentTitle(surface: { id: string; title: string } | undefined) {
   const { id, busy } = useConversation()
   const label = useConversations().find((conversation) => conversation.id === id)?.label
+  const project = projectTitle(useSystem())
   const app = surface && surface.id !== HOME ? surface.title : undefined
   useEffect(() => {
-    const name = app
-      ? `${app} · Ultimate`
-      : id === ROOT || id === undefined
-        ? 'Ultimate'
-        : `${label ?? `#${id}`} · Ultimate`
+    const shown = app ?? (id === ROOT || id === undefined ? undefined : (label ?? `#${id}`))
+    const name = [project ?? 'Ultimate', shown].filter(Boolean).join(' · ')
     document.title = busy ? `● ${name}` : name
-  }, [app, label, busy, id])
+  }, [app, label, busy, id, project])
 }
 
 /** Command shortcuts, which start with the app. */
@@ -173,6 +179,7 @@ export function App() {
   return (
     <TooltipProvider delayDuration={400}>
       <div className="flex h-dvh flex-col">
+        {loaded && !embedded && <TitleBar />}
         {loaded && !pending && <Surfaces surfaces={line} />}
       </div>
       {loaded && <Shortcuts />}
