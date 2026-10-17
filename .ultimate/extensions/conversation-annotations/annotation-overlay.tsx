@@ -1,5 +1,5 @@
 import { MessageSquareIcon, MessageSquarePlusIcon, XIcon } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { events, useConversation, useDoc, useEvent } from '@/sdk'
 import { AnnotationQuote } from './annotation-cards.tsx'
@@ -81,7 +81,6 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
   const [selection, setSelection] = useState<SelectionControl>()
   const [editor, setEditor] = useState<AnnotationEditorRequest>()
   const [mounts, setMounts] = useState<SourceMount[]>([])
-  const alive = useRef(false)
   useEvent('conversation-annotations:open', (value) => {
     // SAFETY: this extension is the only emitter; ephemeral DOM references are not a wire format.
     const request = value as AnnotationEditorRequest
@@ -92,12 +91,12 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
     if (!node) {
       return undefined
     }
-    alive.current = true
+    let active = true
     const attached = new Map<HTMLElement, HTMLElement>()
     let scheduled = false
     const scan = () => {
       scheduled = false
-      if (!alive.current) {
+      if (!active) {
         return
       }
       let changed = false
@@ -192,7 +191,7 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
     document.addEventListener('mouseover', onPointer)
     scan()
     return () => {
-      alive.current = false
+      active = false
       observer.disconnect()
       document.removeEventListener('pointerdown', keepSourceOpen, true)
       document.removeEventListener('selectionchange', onSelection)
