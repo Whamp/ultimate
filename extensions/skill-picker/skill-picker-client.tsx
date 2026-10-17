@@ -38,7 +38,11 @@ function inMarkdownCode(prefix: string): boolean {
       inlineDelimiter = 0
       continue
     }
-    paragraph = true
+    if (!paragraph) {
+      inlineDelimiter = 0
+    }
+    // ATX headings end at the newline; they do not start a continuing paragraph.
+    paragraph = !/^ {0,3}#{1,6}(?:[ \t]|$)/.test(line)
     for (const ticks of line.matchAll(/(?<!\\)`+/g)) {
       if (inlineDelimiter === 0) {
         inlineDelimiter = ticks[0].length

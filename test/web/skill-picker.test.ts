@@ -99,6 +99,28 @@ describe('dollar skill trigger', () => {
     expect(queryAt(text)).toEqual({ start: text.length - 3, end: text.length, query: 'cr' })
   })
 
+  it.each([
+    '# Repro\n    $cr',
+    '###### Repro\n\t$cr',
+    '   ## Repro\n    $cr',
+    'Prose\n# Repro\n    $cr',
+  ])('keeps indented code after a heading literal: %s', (text) => {
+    expect(queryAt(text)).toBeNull()
+  })
+
+  it.each([
+    '# Repro\n$cr',
+    '# Repro\nUse $cr',
+    '# Repro\nFirst prose line\nsecond prose line\n    $cr',
+    'First prose line\nsecond prose line\n    $cr',
+    '####### Not a heading\n    $cr',
+    '#Not a heading\n    $cr',
+    '# Repro $cr',
+    '# `unfinished heading span\nUse $cr',
+  ])('preserves ordinary queries in headings and prose: %s', (text) => {
+    expect(queryAt(text)).toEqual({ start: text.length - 3, end: text.length, query: 'cr' })
+  })
+
   it.each(['``code ` $cr', '`code `` $cr'])('keeps inline backtick spans literal: %s', (text) => {
     expect(queryAt(text)).toBeNull()
   })
