@@ -129,6 +129,7 @@ export {
   getNewConversationConfiguration,
 } from './composer.tsx'
 export type {
+  ComposerAutocomplete,
   ComposerEditor,
   ComposerSelection,
   ComposerTarget,

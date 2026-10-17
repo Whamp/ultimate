@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Kbd } from '@/components/ui/kbd'
 import { Button } from '@/components/ui/button'
@@ -58,6 +58,12 @@ function SkillMenu({
     Math.max(0, results.length - 1),
   )
   const selected = results[index]
+  const activeOptionId = selected ? `${id}-option-${index}` : undefined
+  const registerAutocomplete = editor.registerAutocomplete
+  const bindAutocomplete = useCallback(
+    () => registerAutocomplete({ listId: id, activeOptionId }),
+    [registerAutocomplete, id, activeOptionId],
+  )
 
   function choose(skill: SkillPickerSkill) {
     editor.replace(query, skillReference(skill))
@@ -115,6 +121,7 @@ function SkillMenu({
             role="listbox"
             aria-label="Skills"
             id={id}
+            ref={bindAutocomplete}
             className="max-h-[min(40vh,20rem)] overflow-y-auto p-1"
           >
             {results.length === 0 && (
@@ -126,6 +133,7 @@ function SkillMenu({
               <div
                 key={skill.path}
                 role="option"
+                id={`${id}-option-${itemIndex}`}
                 aria-selected={itemIndex === index}
                 ref={(element) => {
                   if (itemIndex === index) element?.scrollIntoView({ block: 'nearest' })

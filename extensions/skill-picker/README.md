@@ -2,7 +2,7 @@
 
 Type `$` at the start of the draft or after whitespace to find skills by name or description. The compact menu stays above the composer in the Agent, dock and new-conversation views. Name matches rank before description matches; both support fuzzy subsequences (`$cr` finds `code-review`). Uppercase shell variables, currency, shell substitutions, escaped dollars, emails and Markdown code spans do not trigger the menu.
 
-Use ↑/↓ to move, Enter or Tab to insert, and Escape to close without stopping a run. Mouse selection keeps focus in the editor. Composition and modified keys stay with the editor. Loading, empty and error states stay in the menu; Retry or Enter retries a failed list request. A `manual only` label means the skill can be selected explicitly but cannot be invoked automatically by the model.
+Use ↑/↓ to move, Enter or Tab to insert, and Escape to close without stopping a run. The focused textarea advertises the mounted listbox and its active option through ARIA; focus stays in the editor as selection changes. Dismissal, blur, composition, loading and error states remove stale option associations; an empty list has no active option. Mouse selection keeps focus in the editor. Composition and modified keys stay with the editor. Loading, empty and error states stay in the menu; Retry or Enter retries a failed list request. A `manual only` label means the skill can be selected explicitly but cannot be invoked automatically by the model.
 
 Selection replaces only the active dollar query with visible Markdown, for example:
 
