@@ -224,6 +224,27 @@ An optional `isolated` prop forces that creation mode without changing the saved
 lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
 through `useCommands()`; a message-action component can pass its entry's id to a command.
 
+### Composer editing
+
+`useComposerEditor()` returns the owning editor inside composer slots, or `null` outside a composer. It exposes the visible `text`, UTF-16 `selection: { start, end }` (exclusive end), `focused`, `composing` and `readOnly` state. `replace(range, text)` edits only that range, persists through the normal draft store, restores focus and puts the caret after the inserted text. It never sends or changes attachments. Invalid ranges and read-only editors are ignored.
+
+`registerKeyHandler(handler)` returns a cleanup function. A mounted suggestion control can register through a React 19 callback ref and return that cleanup:
+
+```tsx
+<div
+  ref={() =>
+    editor.registerKeyHandler((event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        close()
+      }
+    })
+  }
+/>
+```
+
+Handlers run before the composer's Enter handling. `preventDefault()` claims a key before Send and global shortcuts (which run in the bubble phase so controls can intentionally prevent them). Composition keys are not dispatched to editor controls; extensions must also respect modifiers. Register only while the control is active, and preserve editor focus on mouse selection. For a menu above the input, contribute a zero-height relative wrapper with an absolute `bottom-full` child to `composer.attachments`; keep it bounded to the composer width. Do not scrape the DOM, attach textarea listeners, or use a submission transport to hide an edit. The built-in `skill-picker` is an example.
+
 ### Composer submissions
 
 A `composer` contribution adds pending content to the normal conversation Send. Its contract is
@@ -468,14 +489,16 @@ runs either way.
 
 Call actions from the UI in one of two ways:
 
-- `useAction(extension, name, args?, { enabled?, onError? })` reads. It calls on mount and again whenever `extension`,
-  `name`, or `args` (compared as JSON) change, unless `enabled` is false; a newer call aborts the older one. It returns
+- `useAction(extension, name, args?, { enabled?, onError?, conversationId? })` reads. It calls on mount and again whenever `extension`,
+  `name`, `args` (compared as JSON), or `conversationId` change, unless `enabled` is false; a newer call aborts the older one. It returns
   `{ data, error, loading, refetch }`: `data` stays while a refetch runs and resets when the args change; `refetch()`
   calls again, also when not `enabled`. A failure shows as a notice unless you pass `onError`.
 - `api.action(extension, name, args?, { conversationId?, signal?, keepalive? })` acts, once: a click that saves,
   closes, or labels something; `keepalive` lets a call sent on `pagehide` outlive the page. It returns a promise of
   the result; afterwards, `refetch()` what changed. A rejection (an `ActionError` with `extension`, `action`,
   `status`, `message`) that nothing catches shows as a notice; catch it to handle it yourself.
+
+Both default to the shown conversation when `conversationId` is undefined. An explicit number selects that conversation; `null` omits conversation context entirely. Use `null` for a new root, or `null` plus an action-specific `{ source }` argument for a new branch; never inherit the ambient shown conversation for a new composer.
 
 ```tsx
 <Button

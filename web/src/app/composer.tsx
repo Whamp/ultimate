@@ -1,7 +1,7 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { KeyboardEvent } from 'react'
 import {
@@ -22,6 +22,7 @@ import { composerSubmissions, conversationStarter, inboxRenderer } from '../sdk/
 import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
+import type { ComposerEditor, ComposerSelection } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -221,6 +222,38 @@ function ConversationComposer({
   if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
   const draft = drafts.get(draftId)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  const pendingSelection = useRef<number | null>(null)
+  const [selection, setSelection] = useState<ComposerSelection>({ start: 0, end: 0 })
+  const [focused, setFocused] = useState(false)
+  const [composing, setComposing] = useState(false)
+  const [keyHandlers] = useState(
+    () => new Set<(event: KeyboardEvent<HTMLTextAreaElement>) => void>(),
+  )
+  const registerKeyHandler = useMemo<ComposerEditor['registerKeyHandler']>(
+    () => (handler) => {
+      keyHandlers.add(handler)
+      return () => {
+        keyHandlers.delete(handler)
+      }
+    },
+    [keyHandlers],
+  )
+  // Synchronize selection after controlled value changes; restore replacements only after React commits the text.
+  useLayoutEffect(() => {
+    const element = textarea.current
+    if (!element) return
+    const caret = pendingSelection.current
+    if (caret !== null) {
+      pendingSelection.current = null
+      element.focus()
+      element.setSelectionRange(caret, caret)
+    }
+    if (selection.start !== element.selectionStart || selection.end !== element.selectionEnd)
+      setSelection({ start: element.selectionStart, end: element.selectionEnd })
+  }, [text, selection])
+  const select = (element: HTMLTextAreaElement) =>
+    setSelection({ start: element.selectionStart, end: element.selectionEnd })
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
@@ -241,6 +274,32 @@ function ConversationComposer({
     if (!key) return
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
+  }
+  const editor: ComposerEditor = {
+    text,
+    selection,
+    focused,
+    composing,
+    readOnly: loading || sending,
+    registerKeyHandler,
+    replace: (range, inserted) => {
+      const current = draft.get()
+      if (
+        loading ||
+        current.sending ||
+        composing ||
+        !Number.isInteger(range.start) ||
+        !Number.isInteger(range.end) ||
+        range.start < 0 ||
+        range.end < range.start ||
+        range.end > current.text.length
+      )
+        return
+      const caret = range.start + inserted.length
+      pendingSelection.current = caret
+      update(current.text.slice(0, range.start) + inserted + current.text.slice(range.end))
+      setSelection({ start: caret, end: caret })
+    },
   }
   const blocked =
     pendingSubmissions > 1
@@ -315,13 +374,18 @@ function ConversationComposer({
     }
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    if (event.defaultPrevented || composing || event.nativeEvent.isComposing) return
+    for (const handler of keyHandlers) {
+      handler(event)
+      if (event.defaultPrevented) return
+    }
+    if (event.key !== 'Enter' || event.shiftKey) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : 'steer')
   }
 
   return (
-    <ComposerContext value={{ target, isolated: isolation, source }}>
+    <ComposerContext value={{ target, isolated: isolation, source, editor }}>
       <div
         data-composer-source={source}
         data-composer-target={target}
@@ -341,12 +405,27 @@ function ConversationComposer({
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
           />
           <PromptInputTextarea
+            ref={textarea}
             autoFocus
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
             id={inputId ?? 'composer-input'}
             aria-label={isNew ? 'Start a conversation' : undefined}
-            onChange={(event) => update(event.target.value)}
+            onChange={(event) => {
+              update(event.currentTarget.value)
+              select(event.currentTarget)
+            }}
+            onSelect={(event) => select(event.currentTarget)}
+            onFocus={(event) => {
+              setFocused(true)
+              select(event.currentTarget)
+            }}
+            onBlur={() => setFocused(false)}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={(event) => {
+              setComposing(false)
+              select(event.currentTarget)
+            }}
             onKeyDown={onKeyDown}
             placeholder={
               isNew

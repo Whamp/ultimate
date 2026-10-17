@@ -68,10 +68,11 @@ export function useShortcuts() {
         timer = setTimeout(() => (pending = []), 1200)
       }
     }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
+    // Editors and controls claim local keys first (for example Escape dismissing suggestions, not stopping a run).
+    window.addEventListener('keydown', onKeyDown)
     return () => {
       clearTimeout(timer)
-      window.removeEventListener('keydown', onKeyDown, { capture: true })
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [])
 }

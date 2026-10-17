@@ -113,7 +113,8 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
      * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
      * on behalf of the shown conversation, and resolve with its result. Rejects with an `ActionError`; one you do not
      * catch shows as a notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive
-     * the page, such as one sent on `pagehide`.
+     * the page, such as one sent on `pagehide`. Set `conversationId: null` to omit conversation context; undefined
+     * keeps the default shown conversation.
      */
     action: async <T = JsonValue>(
       extension: string,
@@ -123,10 +124,11 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
         conversationId,
         signal,
         keepalive,
-      }: { conversationId?: number; signal?: AbortSignal; keepalive?: boolean } = {},
+      }: { conversationId?: number | null; signal?: AbortSignal; keepalive?: boolean } = {},
     ): Promise<T> => {
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
-      const body: ExtensionActionRequest = { args, conversationId: conversationId ?? shown() }
+      const body: ExtensionActionRequest = { args }
+      if (conversationId !== null) body.conversationId = conversationId ?? shown()
       try {
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
         return result as T

@@ -3,7 +3,7 @@
 import { cn } from 'cn'
 import { ArrowUpIcon, SquareIcon } from 'lucide-react'
 import type { ComponentProps } from 'react'
-import { useLayoutEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 
 export const PromptInput = ({ className, ...props }: ComponentProps<'form'>) => (
@@ -23,9 +23,24 @@ export const PromptInputTextarea = ({
   className,
   maxHeight = 320,
   value,
+  ref: externalRef,
   ...props
 }: PromptInputTextareaProps) => {
   const ref = useRef<HTMLTextAreaElement>(null)
+  const attach = useCallback(
+    (element: HTMLTextAreaElement | null) => {
+      ref.current = element
+      const cleanup = typeof externalRef === 'function' ? externalRef(element) : undefined
+      if (externalRef && typeof externalRef !== 'function') externalRef.current = element
+      return () => {
+        ref.current = null
+        if (cleanup) cleanup()
+        else if (typeof externalRef === 'function') externalRef(null)
+        else if (externalRef) externalRef.current = null
+      }
+    },
+    [externalRef],
+  )
   useLayoutEffect(() => {
     const element = ref.current
     if (!element) return
@@ -38,7 +53,7 @@ export const PromptInputTextarea = ({
         'block w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/60 disabled:cursor-not-allowed',
         className,
       )}
-      ref={ref}
+      ref={attach}
       rows={1}
       value={value}
       {...props}

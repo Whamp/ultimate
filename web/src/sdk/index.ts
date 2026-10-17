@@ -123,8 +123,14 @@ export type {
 export { NewConversationComposer } from '../app/composer.tsx'
 export {
   useComposer,
+  useComposerEditor,
   newConversationKey,
   useNewConversationConfiguration,
   getNewConversationConfiguration,
 } from './composer.tsx'
-export type { ComposerTarget, NewConversationChoices } from './composer.tsx'
+export type {
+  ComposerEditor,
+  ComposerSelection,
+  ComposerTarget,
+  NewConversationChoices,
+} from './composer.tsx'

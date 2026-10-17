@@ -1,5 +1,6 @@
 import type { ConfigureRequest } from '../../../shared/protocol.ts'
 import { createContext, useContext } from 'react'
+import type { KeyboardEvent } from 'react'
 import { api } from './client.ts'
 import { getState, useAction, useConversation, useExtensions, useUiState } from './hooks.ts'
 
@@ -55,9 +56,35 @@ export const ComposerContext = createContext<{
   isolated?: boolean
   /** The conversation a new branch starts from; absent for a new root. */
   source?: number
+  /** The editor owning these slots; absent outside a mounted composer. */
+  editor?: ComposerEditor
 }>({
   target: 'conversation',
 })
+
+/** A UTF-16 range in the visible composer draft, with an exclusive end. */
+export interface ComposerSelection {
+  start: number
+  end: number
+}
+
+/** Editing is local to this composer; replacing text never submits or changes attachments. */
+export interface ComposerEditor {
+  text: string
+  selection: ComposerSelection
+  focused: boolean
+  composing: boolean
+  readOnly: boolean
+  /** Replace a draft range, focus the editor and put the caret after the inserted text. */
+  replace: (range: ComposerSelection, text: string) => void
+  /** Register while a control is mounted. Prevent default to claim a key before Send and shortcuts. */
+  registerKeyHandler: (handler: (event: KeyboardEvent<HTMLTextAreaElement>) => void) => () => void
+}
+
+/** The supported draft editor for this composer's slots, or null outside a composer. */
+export function useComposerEditor() {
+  return useContext(ComposerContext).editor ?? null
+}
 
 /** The composer owning this toolbar or status contribution. */
 export function useComposer() {

@@ -61,11 +61,12 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
       { id: 'palette', keys: 'mod+k' },
       { id: 'sequence', keys: 'mod+k m' },
       { id: 'thinking', keys: 'shift+tab', whileTyping: true },
+      { id: 'stop', keys: 'escape', whileTyping: true },
       { id: 'hidden', keys: 'y', when: () => false },
     ].map((command) => ({ extension: 'test', title: command.id, run() {}, ...command })),
   )
   useShortcuts()
-  const send = (key: string, target: Element = new Element(), extra = {}) => {
+  const send = (key: string, target: Element = new Element(), extra = {}, claimed = false) => {
     const event = new Event('keydown', { cancelable: true })
     Object.defineProperty(event, 'target', { value: target })
     Object.assign(
@@ -81,6 +82,7 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
       },
       extra,
     )
+    if (claimed) event.preventDefault()
     window.dispatchEvent(event)
     return event.defaultPrevented
   }
@@ -102,6 +104,11 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   composer.id = 'composer-input'
   expect(send('Tab', composer, { shiftKey: true })).toBe(true)
   expect(runCommand).toHaveBeenLastCalledWith('thinking')
+  const beforeDismiss = runCommand.mock.calls.length
+  expect(send('Escape', composer, {}, true)).toBe(true)
+  expect(runCommand).toHaveBeenCalledTimes(beforeDismiss)
+  expect(send('Escape', composer)).toBe(true)
+  expect(runCommand).toHaveBeenLastCalledWith('stop')
   dialog.mockReturnValue({})
   expect(send('Tab', composer, { shiftKey: true })).toBe(false)
   dialog.mockReturnValue(null)

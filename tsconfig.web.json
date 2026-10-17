@@ -33,6 +33,7 @@
     "extensions/sounds/tones.ts",
     "extensions/workspaces/types.ts",
     "extensions/subagents/message-types.ts",
+    "extensions/skill-picker/skill-picker-types.ts",
     "test/web"
   ]
 }

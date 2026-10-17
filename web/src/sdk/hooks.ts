@@ -341,14 +341,24 @@ export interface ActionState<T> {
  * Call a server action of an extension and keep its result: on mount and whenever `extension`, `name`, or `args`
  * (compared as JSON) change, unless `enabled` is false. A newer call, new args, or an unmount abort the call in flight,
  * also one `refetch` started; its late result is ignored. A failure shows as a notice unless you pass `onError`.
+ * `conversationId: null` omits conversation context, undefined uses the shown conversation; changing it refetches.
  */
 export function useAction<T = JsonValue>(
   extension: string,
   name: string,
   args: JsonValue = null,
-  options: { enabled?: boolean; onError?: (error: ActionError) => void } = {},
+  options: {
+    enabled?: boolean
+    onError?: (error: ActionError) => void
+    conversationId?: number | null
+  } = {},
 ): ActionState<T> {
-  const key = JSON.stringify([extension, name, args])
+  const key = JSON.stringify([
+    extension,
+    name,
+    args,
+    options.conversationId === undefined ? 'shown' : options.conversationId,
+  ])
   const [state, setState] = useState<{
     key: string
     data?: T
@@ -357,10 +367,12 @@ export function useAction<T = JsonValue>(
   }>({ key, loading: options.enabled !== false })
   const latest = useRef({
     args,
+    conversationId: options.conversationId,
     onError: options.onError,
     controller: undefined as AbortController | undefined,
   })
   latest.current.args = args
+  latest.current.conversationId = options.conversationId
   latest.current.onError = options.onError
   const call = useCallback(async () => {
     latest.current.controller?.abort()
@@ -369,6 +381,7 @@ export function useAction<T = JsonValue>(
     setState((previous) => ({ ...(previous.key === key ? previous : { key }), loading: true }))
     try {
       const data = await api.action<T>(extension, name, latest.current.args, {
+        conversationId: latest.current.conversationId,
         signal: controller.signal,
       })
       if (controller.signal.aborted) return undefined

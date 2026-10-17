@@ -32,6 +32,25 @@ describe('extension actions', () => {
     })
   })
 
+  it('omits conversation context only for an explicit null override, even when another conversation is shown', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(200, { result: [] }))
+    const store = createStore()
+    store.show(37)
+    const api = createApi(store, { fetch })
+    await api.action('skill-picker', 'list', null, { conversationId: null })
+    await api.action('skill-picker', 'list', { source: 9 }, { conversationId: null })
+    await api.action('skill-picker', 'list', null, { conversationId: undefined })
+    const bodies = fetch.mock.calls.map(([, init]) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected a serialized action request')
+      return JSON.parse(init.body)
+    })
+    expect(bodies).toEqual([
+      { args: null },
+      { args: { source: 9 } },
+      { args: null, conversationId: 37 },
+    ])
+  })
+
   it('rejects with an ActionError naming the extension, action, status, and message', async () => {
     const { api } = setup(() => json(500, { error: 'Extension action failed' }))
     const error = await api.action('notes', 'save', 'x').catch((failure: unknown) => failure)
