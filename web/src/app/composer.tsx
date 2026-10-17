@@ -22,7 +22,7 @@ import { composerSubmissions, conversationStarter, inboxRenderer } from '../sdk/
 import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
-import type { ComposerEditor, ComposerSelection } from '../sdk/composer.tsx'
+import type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -227,6 +227,14 @@ function ConversationComposer({
   const [selection, setSelection] = useState<ComposerSelection>({ start: 0, end: 0 })
   const [focused, setFocused] = useState(false)
   const [composing, setComposing] = useState(false)
+  const [autocomplete, setAutocomplete] = useState<ComposerAutocomplete>()
+  const registerAutocomplete = useMemo<ComposerEditor['registerAutocomplete']>(
+    () => (next) => {
+      setAutocomplete(next)
+      return () => setAutocomplete((current) => (current === next ? undefined : current))
+    },
+    [],
+  )
   const [keyHandlers] = useState(
     () => new Set<(event: KeyboardEvent<HTMLTextAreaElement>) => void>(),
   )
@@ -282,6 +290,7 @@ function ConversationComposer({
     composing,
     readOnly: loading || sending,
     registerKeyHandler,
+    registerAutocomplete,
     replace: (range, inserted) => {
       const current = draft.get()
       if (
@@ -411,6 +420,10 @@ function ConversationComposer({
             onPaste={(event) => void paste(event)}
             id={inputId ?? 'composer-input'}
             aria-label={isNew ? 'Start a conversation' : undefined}
+            aria-autocomplete={autocomplete ? 'list' : undefined}
+            aria-haspopup={autocomplete ? 'listbox' : undefined}
+            aria-controls={autocomplete?.listId}
+            aria-activedescendant={autocomplete?.activeOptionId}
             onChange={(event) => {
               update(event.currentTarget.value)
               select(event.currentTarget)

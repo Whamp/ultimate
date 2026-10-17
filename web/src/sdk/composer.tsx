@@ -68,6 +68,12 @@ export interface ComposerSelection {
   end: number
 }
 
+/** IDs of the mounted suggestion list and its active option; focus remains in the textarea. */
+export interface ComposerAutocomplete {
+  listId: string
+  activeOptionId?: string
+}
+
 /** Editing is local to this composer; replacing text never submits or changes attachments. */
 export interface ComposerEditor {
   text: string
@@ -79,6 +85,8 @@ export interface ComposerEditor {
   replace: (range: ComposerSelection, text: string) => void
   /** Register while a control is mounted. Prevent default to claim a key before Send and shortcuts. */
   registerKeyHandler: (handler: (event: KeyboardEvent<HTMLTextAreaElement>) => void) => () => void
+  /** Associate a mounted listbox with the textarea; cleanup removes only this registration. */
+  registerAutocomplete: (autocomplete: ComposerAutocomplete) => () => void
 }
 
 /** The supported draft editor for this composer's slots, or null outside a composer. */

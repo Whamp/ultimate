@@ -243,6 +243,8 @@ through `useCommands()`; a message-action component can pass its entry's id to a
 />
 ```
 
+A listbox that keeps focus in the editor also calls `registerAutocomplete({ listId, activeOptionId? })`. The core renders `aria-autocomplete="list"`, `aria-haspopup="listbox"`, `aria-controls` and `aria-activedescendant` on the native textarea. Supply the actual listbox ID and the selected option's ID; omit `activeOptionId` for an empty list. Register from a **memoized** listbox callback ref so normal editor renders do not replace the registration; update it when either ID changes and return its cleanup. Cleanup removes only that registration, so an older control cannot clear a newer one. Unmounting the listbox (dismissal, blur, loading or error) removes its ARIA association. The textarea remains a multiline textbox, not a single-line combobox, and keyboard focus does not move to the options.
+
 Handlers run before the composer's Enter handling. `preventDefault()` claims a key before Send and global shortcuts (which run in the bubble phase so controls can intentionally prevent them). Composition keys are not dispatched to editor controls; extensions must also respect modifiers. Register only while the control is active, and preserve editor focus on mouse selection. For a menu above the input, contribute a zero-height relative wrapper with an absolute `bottom-full` child to `composer.attachments`; keep it bounded to the composer width. Do not scrape the DOM, attach textarea listeners, or use a submission transport to hide an edit. The built-in `skill-picker` is an example.
 
 ### Composer submissions
