@@ -1,16 +1,8 @@
 import { createServer, request as upstreamRequest } from 'node:http'
 import type { IncomingMessage } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import type { TransportProject } from './transport-contracts.ts'
 import { readFile } from 'node:fs/promises'
-
-/** Fixed child runtime addresses, created by the launcher, never by a request. */
-export interface TransportProject {
-  id: string
-  url: string
-  root: number
-  pid: number
-  projectRoot: string
-  userHome: string
-}
 
 /** Loopback-only routing experiment. No response rewriting, cookies, auth, or WebSocket proxy. */
 export async function createTransportGateway(projects: readonly TransportProject[]) {
@@ -49,6 +41,7 @@ export async function createTransportGateway(projects: readonly TransportProject
     const files = new Map<string, readonly [string, string]>([
       ['/', ['transport-shell.html', 'text/html']],
       ['/transport-shell.js', ['transport-shell.js', 'text/javascript']],
+      ['/transport-boundary.js', ['transport-boundary.js', 'text/javascript']],
     ])
     const file = files.get(url.pathname)
     if (request.method === 'GET' && file && !url.search) {
@@ -131,10 +124,8 @@ export async function createTransportGateway(projects: readonly TransportProject
       resolve()
     })
   })
-  const address = server.address()
-  if (!address || typeof address === 'string') {
-    throw new Error('Transport has no TCP address')
-  }
+  // SAFETY: successful listen(0, '127.0.0.1') above binds TCP, never a pipe; the server is still open.
+  const address = server.address() as AddressInfo
   authority = `127.0.0.1:${address.port}`
   return {
     url: `http://${authority}`,

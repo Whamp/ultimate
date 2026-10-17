@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { chromium } from 'playwright-core'
-import type { TransportProject } from './transport-gateway.ts'
+import type { TransportProject } from './transport-contracts.ts'
+import { decodeTransportProjects } from './transport-boundary.js'
 
 const URL = process.argv[2]
 const OUTPUT = process.argv[3] ?? '/tmp/ultimate-transport-evidence'
@@ -12,8 +13,7 @@ if (!URL || !/^http:\/\/127\.0\.0\.1:\d+$/.test(URL)) {
 await mkdir(OUTPUT, { recursive: true })
 const manifestResponse = await fetch(`${URL}/projects`)
 assert.equal(manifestResponse.status, 200)
-// Trusted launcher manifest, also consumed by the shell; children supply no user-controlled fields.
-const projects: TransportProject[] = await manifestResponse.json()
+const projects = decodeTransportProjects(await manifestResponse.text())
 assert.equal(projects.length, 2)
 const alpha = projects.find((project) => project.id === 'alpha')
 const beta = projects.find((project) => project.id === 'beta')
@@ -110,7 +110,7 @@ try {
   const betaFrame = page.frameLocator('iframe[title="Actual Ultimate · beta"]')
   await betaFrame.getByText(beta.projectRoot, { exact: true }).waitFor()
   assert.match(await page.locator('#beta-status').innerText(), /Idle/)
-  await page.screenshot({ path: join(OUTPUT, 'background-alpha.png') })
+  await page.screenshot({ path: join(OUTPUT, 'background-alpha.png'), animations: 'disabled' })
   observations.push(
     'Actual Alpha API returned 202 while Beta was visible; Alpha SSE reported Working; Beta remained Idle.',
   )
@@ -134,7 +134,12 @@ try {
   )
   await page.getByLabel('Project', { exact: true }).selectOption('alpha')
   await alphaFrame.getByText('Phases demo complete.', { exact: true }).last().waitFor()
-  await page.screenshot({ path: join(OUTPUT, 'completed-alpha.png') })
+  await page.screenshot({ path: join(OUTPUT, 'completed-alpha.png'), animations: 'disabled' })
+  assert.equal(
+    await alphaFrame.getByText('Phases demo complete.', { exact: true }).last().isVisible(),
+    true,
+    'Alpha completion must remain visible after capture',
+  )
   observations.push(
     'Alpha completed while Beta remained selected; Alpha scratch is after, Beta scratch is before. Real Alpha transcript renders on return.',
   )
@@ -159,7 +164,7 @@ try {
   assert.ok(failures.includes('/src/main.tsx'))
   assert.ok(failures.includes('/@vite/client'))
   assert.equal((await page.locator('body').innerText()).trim(), '')
-  await page.screenshot({ path: join(OUTPUT, 'prefix-failure.png') })
+  await page.screenshot({ path: join(OUTPUT, 'prefix-failure.png'), animations: 'disabled' })
   observations.push(
     `Prefix HTML is 200 but unchanged root assets fail with 404: ${failures.join(', ')}. Empty body, not a working single-origin app.`,
   )

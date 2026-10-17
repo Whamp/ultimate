@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer, request } from 'node:http'
 import { test } from 'node:test'
+import type { AddressInfo } from 'node:net'
 import { createTransportGateway } from './transport-gateway.ts'
 
 // A tiny upstream is sufficient here: these assertions target gateway admission and routing,
@@ -16,8 +17,8 @@ await test('gateway admits only its literal local routes, Host and Origin; strip
     response.end('{"submissionId":42}')
   })
   await new Promise<void>((resolve) => child.listen(0, '127.0.0.1', resolve))
-  const address = child.address()
-  assert.ok(address && typeof address !== 'string')
+  // SAFETY: the awaited listen call above binds a TCP port/host, not a pipe, and child remains open.
+  const address = child.address() as AddressInfo
   const gateway = await createTransportGateway([
     {
       id: 'alpha',

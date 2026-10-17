@@ -44,12 +44,19 @@ const CATALOGUE = defineDoc<{ projects: JsonRepresentation<ProjectRecord>[] }>({
   initial: () => ({ projects: [] }),
 })
 
+function provisionError(cause: unknown): Error {
+  return cause instanceof Error
+    ? cause
+    : new Error(`Recovery effect failed: ${String(cause)}`, { cause })
+}
+
 async function ensureProjectEffect(input: ProvisionInput) {
   try {
     await mkdir(input.effectPath)
   } catch (cause) {
-    if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'EEXIST') {
-      throw cause
+    const error = provisionError(cause)
+    if (!('code' in error) || error.code !== 'EEXIST') {
+      throw error
     }
     // Only an existing directory satisfies this deliberately narrow effect contract.
     if (!(await stat(input.effectPath)).isDirectory()) {
@@ -69,10 +76,7 @@ function defineProvisionTask(options: RecoveryOptions) {
         try {
           await (options.effect ?? ensureProjectEffect)(task.input)
         } catch (cause) {
-          if (!(cause instanceof Error)) {
-            throw cause
-          }
-          failure = cause.message
+          failure = provisionError(cause).message
         }
         if (failure === undefined) {
           await options.afterEffect?.(task.input)

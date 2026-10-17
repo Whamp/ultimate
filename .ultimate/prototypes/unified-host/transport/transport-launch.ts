@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTransportGateway } from './transport-gateway.ts'
-import type { TransportProject } from './transport-gateway.ts'
+import type { TransportProject } from './transport-contracts.ts'
+import { decodeTransportReady } from './transport-boundary.js'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const SCRIPT = fileURLToPath(import.meta.url)
@@ -122,14 +123,8 @@ if (process.argv[2] === '--child') {
       } finally {
         clearTimeout(deadline)
       }
-      // This file is written by our child only; validate its two small boundary fields.
-      const ready: unknown = JSON.parse(await readFile(join(base, 'ready.json'), 'utf8'))
-      assert.ok(ready && typeof ready === 'object' && 'url' in ready && 'root' in ready)
-      assert.ok(typeof ready.url === 'string' && typeof ready.root === 'number')
-      assert.ok(
-        Number.isSafeInteger(ready.root) && ready.root > 0 && child.pid,
-        'Transport child readiness file is invalid',
-      )
+      const ready = decodeTransportReady(await readFile(join(base, 'ready.json'), 'utf8'))
+      assert.ok(child.pid, 'Transport child has no process ID')
       projects.push({ id, url: ready.url, root: ready.root, pid: child.pid, projectRoot, userHome })
       child.once('exit', () => {
         if (!stopping) {

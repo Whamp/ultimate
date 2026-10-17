@@ -128,6 +128,27 @@ await test('canonical duplicate registration, postcompletion retry, distinct pro
   assert.equal((await reopened.snapshotProjects()).length, 3)
 })
 
+await test('non-Error effect rejection becomes a meaningful failed catalogue record', async (t) => {
+  const { home, project } = await temporaryCatalogue(t)
+  const catalogue = await openRecoveryCatalogue({
+    home,
+    effect: async () => {
+      // Deliberately violate the effect boundary's error contract to exercise normalization.
+      // oxlint-disable-next-line typescript/only-throw-error
+      throw 'injected-effect-denial'
+    },
+  })
+  t.after(() => catalogue.close())
+  const taskId = await catalogue.registerProject(project)
+  const receipt = await catalogue.harness.waitForTask(taskId, BACKGROUND_CONTEXT)
+  assert.equal(receipt.state.outcome.status, 'failed')
+  const provision = (await catalogue.snapshotProjects())[0]?.provision
+  assert.ok(provision?.status === 'failed')
+  assert.equal(provision.error, 'Recovery effect failed: injected-effect-denial')
+  assert.equal(await catalogue.registerProject(project), taskId)
+  assert.deepEqual(await readdir(join(home, 'effects')), [])
+})
+
 await test('SIGKILL after idempotent effect, reopen same SQLite, replay, then stable retry', async (t) => {
   const { home, project } = await temporaryCatalogue(t)
   await killAtEffectBoundary(home, project, 'safe')

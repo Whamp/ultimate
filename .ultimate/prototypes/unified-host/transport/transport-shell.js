@@ -1,3 +1,5 @@
+import { decodeTransportProjects } from './transport-boundary.js'
+
 /** @param {string} id */
 function element(id) {
   const node = document.getElementById(id)
@@ -25,8 +27,7 @@ try {
   if (!response.ok) {
     throw new Error(`Project list failed: ${response.status}`)
   }
-  /** @type {import('./transport-gateway.ts').TransportProject[]} */
-  const projects = await response.json()
+  const projects = decodeTransportProjects(await response.text())
   const controls = { selector, direct, prefix }
   /** @type {Map<string, HTMLIFrameElement>} */
   const frames = new Map()
