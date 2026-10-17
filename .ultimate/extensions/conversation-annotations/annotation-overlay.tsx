@@ -178,6 +178,10 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
     // Floating annotation controls must not dismiss the plan popover that owns their source.
     const keepSourceOpen = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
+        if (event.target.closest('button[data-annotation-floating]')) {
+          // Capture stops React's pointer handler; preserve the quote here before touch defaults.
+          event.preventDefault()
+        }
         event.stopPropagation()
       }
     }
@@ -224,10 +228,6 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
               zIndex: 90,
               left: Math.max(8, Math.min(selection.rect.left, window.innerWidth - 180)),
               top: Math.max(8, Math.min(selection.rect.bottom + 6, window.innerHeight - 42)),
-            }}
-            onPointerDown={(event) => {
-              // Keep the selected quote and this button intact until click, including on touch.
-              event.preventDefault()
             }}
             onClick={() => {
               setEditor(selection.request)
