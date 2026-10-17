@@ -35,9 +35,16 @@ resumes the run where it was.
 This avoids the machine's plain `pnpm` shim, which can fail in the server environment. It does not install or
 change global tools. Keep both version pins in sync when updating pnpm.
 
-New workspaces run `install --frozen-lockfile --prefer-offline`. The lander runs `check` first, then `test`,
-`test:e2e`, and `eval` in parallel. The npm launcher needs network access if its pinned pnpm package is not cached;
-`--prefer-offline` applies to dependency installation, not to the launcher.
+These project settings apply only when the user has chosen this project's setup. Then new workspaces run
+`install --frozen-lockfile --prefer-offline`, and the lander runs `check` first, then `test`, `test:e2e`, and `eval`
+in parallel before pushing to `origin` (`Whamp/ultimate`). Otherwise, the coordinator must run all four suites on
+the final candidate and make a normal push after verification if the lander did not push. Never change the user's
+trust selection to activate these settings. The npm launcher needs network access if its pinned pnpm package is
+not cached; `--prefer-offline` applies to dependency installation, not to the launcher.
+
+For fork remotes, independent and dependent PRs, and requested upstream contributions, see
+[the fork and PR workflow](../AGENTS.md#fork-and-pr-workflow). Workflow instructions do not grant standing GitHub
+issue or PR mutation permission.
 
 ## Read more
 

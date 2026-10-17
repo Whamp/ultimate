@@ -128,14 +128,18 @@ A top-level conversation created with New isolated conversation works in its own
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
-The lander is the final gate: it runs every configured check (here `pnpm check`, then `pnpm test`, `pnpm test:e2e` and `pnpm eval` in parallel) on the merged result
-and reports back, landed or not, with findings.
+This repository's configured lander checks and push apply only when the user has chosen this project's setup.
+With that setup chosen, the lander runs `pnpm check`, then `pnpm test`, `pnpm test:e2e` and `pnpm eval` in parallel
+on the merged result and reports back, landed or not, with findings. Otherwise, the coordinator must run all four
+suites on the final candidate and make a normal push after verification if the lander did not push. Use only authorized
+subscription models for evals; report a blocked suite rather than silently skipping it. Never change the user's trust
+selection to activate checks or pushing.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
 the submitting conversation; the source's "Lander · <target>" conversation, pinned at the top of the sidebar, keeps
-the full log and shows as working in the Agents tab while it lands. It runs the `lander` agent
-definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
+the full log and shows as working in the Agents tab while it lands. With this project's setup chosen, it runs the
+`.ultimate/agents/lander.md` definition with `onFailure: fix`, so a conflict or a twice-failing check is
 resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
 conversation about the queue and recent landings.
 `workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
@@ -145,10 +149,12 @@ For `server/` or `shared/` changes, an authorized `restart` works once the runni
 ### Standing permission to push this repository
 
 The user authorizes the top-level agent to commit verified changes, land them, and push the destination branch
-(normally `main`) to this repository's GitHub remote, `origin` (`HazAT/ultimate`), without asking again. This permission
-applies to this repository whether public or private, not to other repositories. `workspace submit` covers this: the
-lander pushes after its checks because `lander.push` is set. After a synchronous `workspace land`, which never pushes,
-push the landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
+(normally `main`) to `origin` (`Whamp/ultimate`) without asking again. This permission applies to this fork whether
+public or private, not to other repositories or to `upstream` (`HazAT/ultimate`). With this project's setup chosen,
+`workspace submit` runs the configured checks and pushes to `origin`. If it does not push, or after a synchronous
+`workspace land` (which never pushes), the coordinator must verify the final candidate and push the landed branch
+explicitly, for example `git push origin main`. Subagents commit and report; only the top-level agent pushes after
+verification and integration.
 
 Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
 incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks,
@@ -156,6 +162,25 @@ then land and push normally without asking again. Stop and report ambiguous conf
 failing checks, security concerns, or a situation requiring a force push or history rewrite—not ordinary remote
 advancement. Do not push secrets or unrelated unverified work.
 This standing permission does not authorize releases, publishing, deployments, or GitHub issue/PR changes.
+
+### Fork and PR workflow
+
+- `origin` is `Whamp/ultimate`, our shared change and discussion home; `main` integrates tested work.
+  `upstream` is `HazAT/ultimate`, for fetching and requested upstream contributions, not standing push permission.
+- Keep the existing Git worktree, Lane and project workflow; do not add a stack manager. Independent topics start
+  from `origin/main`. A topic that needs an unlanded parent starts from that parent's branch, and its PR targets that
+  branch. Stack only real dependencies; link them and the verification results in the PR body.
+- Set the repository explicitly on GitHub CLI PR commands: `--repo Whamp/ultimate`; a fork's default can select its
+  parent. Independent PRs target `main`; dependent PRs target the parent branch with `--base <parent-branch>`.
+- `workspace submit` integrates directly into its target branch (normally `main`); it does not create a PR. When the
+  user requests a reviewed PR workflow, publish the topic and create or update its PR only as authorized by that
+  request, then use the lander after approval. Do not invent a PR for every tool call. These routing instructions do
+  not grant standing permission for future GitHub issue or PR mutations.
+- Update topics by merging their current base; preserve both histories, with no rebase or force push. Already
+  integrated changes stay in history, without retroactive stacks. Leave the existing Tailscale upstream PR #1 and
+  its topic branch unchanged unless the user requests work on them.
+- For a requested upstream contribution, use a dedicated clean topic from `upstream/main`, not the whole fork's
+  `main`. Target `HazAT/ultimate` explicitly for that authorized PR; this does not authorize pushing upstream.
 
 ## Conventions
 
@@ -167,7 +192,7 @@ This standing permission does not authorize releases, publishing, deployments, o
   properties), relative imports end in `.ts`.
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
-- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs every suite. Keep `pnpm test` fast: no real-time waits, no spawned processes (those go to `test/e2e`), and fix or delete a flaky test rather than skipping it or raising its timeout. Per-test timeouts fail lint (`ultimate/no-test-timeout`); `test/e2e` is exempt.
+- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the configured lander runs every suite when this project's setup is chosen (otherwise the coordinator runs them). Keep `pnpm test` fast: no real-time waits, no spawned processes (those go to `test/e2e`), and fix or delete a flaky test rather than skipping it or raising its timeout. Per-test timeouts fail lint (`ultimate/no-test-timeout`); `test/e2e` is exempt.
 - Every user-visible result is designed, not dumped: status and outcomes (a subagent report, a landing, a failure) get a
   renderer that matches the existing cards (see `extensions/subagents/messages.tsx`, `extensions/workspaces/log.tsx`),
   never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
