@@ -70,8 +70,7 @@ export function connectAnnotationDom({
     attributes: true,
     attributeFilter: ['data-annotation-content', 'data-annotation-entry', 'data-annotation-field'],
   })
-  const handleSelection = (event: Event) => {
-    // Whole-table actions have no text range; do not clear them on their own mouseup.
+  const handleSelectionOutsideFloatingControls = (event: Event) => {
     if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
       return
     }
@@ -104,30 +103,28 @@ export function connectAnnotationDom({
       })
     }
   }
-  // Floating annotation controls must not dismiss the plan popover that owns their source.
   // oxlint-disable-next-line unicorn/consistent-function-scoping -- each connection needs its own listener identity so disposal cannot remove another connection's capture
-  const keepSourceOpen = (event: PointerEvent) => {
+  const protectSourceAndFloatingButtonSelection = (event: PointerEvent) => {
     if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
       if (event.target.closest('button[data-annotation-floating]')) {
-        // Capture stops React's pointer handler; preserve the quote here before touch defaults.
         event.preventDefault()
       }
       event.stopPropagation()
     }
   }
-  document.addEventListener('pointerdown', keepSourceOpen, true)
-  document.addEventListener('selectionchange', handleSelection)
-  document.addEventListener('mouseup', handleSelection)
-  document.addEventListener('keyup', handleSelection)
+  document.addEventListener('pointerdown', protectSourceAndFloatingButtonSelection, true)
+  document.addEventListener('selectionchange', handleSelectionOutsideFloatingControls)
+  document.addEventListener('mouseup', handleSelectionOutsideFloatingControls)
+  document.addEventListener('keyup', handleSelectionOutsideFloatingControls)
   document.addEventListener('mouseover', onPointer)
   scan()
   return () => {
     active = false
     observer.disconnect()
-    document.removeEventListener('pointerdown', keepSourceOpen, true)
-    document.removeEventListener('selectionchange', handleSelection)
-    document.removeEventListener('mouseup', handleSelection)
-    document.removeEventListener('keyup', handleSelection)
+    document.removeEventListener('pointerdown', protectSourceAndFloatingButtonSelection, true)
+    document.removeEventListener('selectionchange', handleSelectionOutsideFloatingControls)
+    document.removeEventListener('mouseup', handleSelectionOutsideFloatingControls)
+    document.removeEventListener('keyup', handleSelectionOutsideFloatingControls)
     document.removeEventListener('mouseover', onPointer)
     for (const mount of attached.values()) {
       mount.remove()

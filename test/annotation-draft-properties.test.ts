@@ -11,10 +11,6 @@ import {
   annotationText,
 } from './annotation-property-fixtures.ts'
 
-// Quantified domain: <=128 UTF-16 units, 1..8 fate rows, revisions 0..20.
-// Oracles: exact saved values and literal fates, never the reconciliation output.
-// UUIDs are preservation/replacement relations, not predicted random values.
-// Each property searches 200 cases at seed 20261017 with native FC_PATH shrinking/replay.
 const count = annotationCounts('drafts')
 const composer = fc.record({
   text: annotationText,

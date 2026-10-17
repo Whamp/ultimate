@@ -14,10 +14,6 @@ import {
   annotationText,
 } from './annotation-property-fixtures.ts'
 
-// For every generated owner/location and exact quote, identity is the public tuple,
-// independent of title/surroundings. No claim of fingerprint collision freedom.
-// Oracle: literal key tuples and exact parser preservation, not another matcher.
-// Budget: 200 cases/property, seed 20261017, native shrinking and FC_SEED/FC_PATH replay.
 const count = annotationCounts('domain')
 const identity = fc.record({
   owner: fc.integer({ min: 1, max: 10000 }),

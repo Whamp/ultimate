@@ -12,11 +12,6 @@ import {
   annotationText,
 } from './annotation-property-fixtures.ts'
 
-// For each 1..20-operation history, a slot->text map owns pending expectations.
-// A frozen obligation captures that map's values plus only the first actual UUID.
-// No decoder, reconciliation or store algorithm is used to construct the model.
-// 100 histories, seed 20261017. Arrays shrink by deleting/simplifying operations.
-// Commands are total; empty-send/no-obligation retry assert rejection, not discard.
 const count = annotationCounts('histories')
 const slot = fc.integer({ min: 0, max: 3 })
 const operation = fc.oneof(
@@ -145,10 +140,12 @@ it('preserves pending slots and frozen obligations across bounded generated oper
           count(frozen ? 'state:obligation' : 'state:unfrozen')
         }
         if (frozen) {
-          // Only text varies per slot in these histories. The fate property separately
-          // checks full JSON reversion, revision increments and new/removed comments.
-          const obligation = new Map(frozen.drafts.map((draft) => [draft.threadId, draft.text]))
-          const expected = drafts().filter((draft) => obligation.get(draft.threadId) !== draft.text)
+          const frozenTextByThread = new Map(
+            frozen.drafts.map((draft) => [draft.threadId, draft.text]),
+          )
+          const expectedTextSurvivors = drafts().filter(
+            (draft) => frozenTextByThread.get(draft.threadId) !== draft.text,
+          )
           await store.retry(async (batch) => {
             assert.deepEqual(batch, frozen)
           })
@@ -159,10 +156,10 @@ it('preserves pending slots and frozen obligations across bounded generated oper
               id: `draft-${draft.threadId.slice(7)}`,
               revision: 0,
             })),
-            expected,
+            expectedTextSurvivors,
           )
           for (const draft of survivors) {
-            if (obligation.has(draft.threadId)) {
+            if (frozenTextByThread.has(draft.threadId)) {
               assert.notEqual(draft.id, `draft-${draft.threadId.slice(7)}`)
               assert.equal(draft.revision, 1)
             } else {
