@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ultimate · Local transport experiment</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: dark;
+        font:
+          13px system-ui,
+          sans-serif;
+        background: #101011;
+        color: #d6d6dc;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      header {
+        height: 36px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        border-bottom: 1px solid #27272b;
+        padding: 0 16px;
+      }
+      strong {
+        color: #bda2f5;
+        font-size: 11px;
+        letter-spacing: 0.22em;
+      }
+      small,
+      .muted {
+        color: #92929c;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 265px 1fr;
+        height: calc(100vh - 36px);
+      }
+      aside {
+        padding: 20px 12px;
+        border-right: 1px solid #27272b;
+        overflow: auto;
+      }
+      h1 {
+        font-size: 15px;
+        font-weight: 550;
+        margin: 0 0 10px;
+      }
+      h2 {
+        font:
+          10px ui-monospace,
+          monospace;
+        letter-spacing: 0.1em;
+        color: #92929c;
+        margin: 24px 0 12px;
+      }
+      p {
+        line-height: 1.6;
+        margin: 8px 0;
+      }
+      button,
+      select {
+        background: #18181b;
+        color: inherit;
+        border: 1px solid #34323d;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: inherit;
+        cursor: pointer;
+      }
+      select,
+      button {
+        width: 100%;
+        text-align: left;
+        margin: 5px 0;
+      }
+      select,
+      button:hover {
+        border-color: #a98adf;
+      }
+      a {
+        color: #bda2f5;
+      }
+      .card {
+        border: 1px solid #303036;
+        background: #161618;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 10px 0;
+      }
+      .card b {
+        font-weight: 500;
+      }
+      .card p {
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      #frames {
+        position: relative;
+        min-width: 0;
+      }
+      iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        display: block;
+      }
+      iframe[hidden] {
+        display: none;
+      }
+      #viewing {
+        margin-left: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>ULTIMATE</strong><small>TRANSPORT LAB · local-only · faux</small
+      ><small id="viewing">Starting…</small>
+    </header>
+    <main>
+      <aside>
+        <h1>Two projects. One shell.</h1>
+        <p class="muted">
+          Separate runtime origins, not a unified app. No real inference or personal config.
+        </p>
+        <h2>VIEW PROJECT</h2>
+        <label for="project">Project</label
+        ><select id="project"></select>
+        <p><a id="direct" target="_blank" rel="noreferrer">Open runtime directly ↗</a></p>
+        <h2>SCOPED API EXPERIMENT</h2>
+        <button id="submit">Run Alpha while viewing Beta</button>
+        <p class="muted">
+          Sends “phases demo” to Alpha's real input API. Beta stays in view. Both real SSE
+          connections remain open. Scratch edits are real; the faux test/commit lines are only
+          echoes.
+        </p>
+        <div id="receipt" class="card" role="status" hidden></div>
+        <div id="alpha-status" class="card" role="status">
+          <b>Alpha</b>
+          <p>Connecting scoped SSE…</p>
+        </div>
+        <div id="beta-status" class="card" role="status">
+          <b>Beta</b>
+          <p>Connecting scoped SSE…</p>
+        </div>
+        <h2>KNOWN BOUNDARY</h2>
+        <div class="card">
+          <b>Prefix-only UI fails</b>
+          <p>
+            HTML passes through unchanged. Root-relative Vite assets do not carry the project prefix
+            and get 404.
+          </p>
+          <a id="prefix" target="_blank" rel="noreferrer">Inspect prefix-only failure ↗</a>
+        </div>
+        <p class="muted">
+          No auth federation, response rewriting, shared navigation, remote access or gateway
+          WebSockets. Frame focus and hotkeys remain per app. Hidden frames keep running; reload
+          loses shell selection.
+        </p>
+        <p id="error" role="alert"></p>
+      </aside>
+      <section id="frames" aria-label="Actual Ultimate project pages"></section>
+    </main>
+    <script type="module" src="/transport-shell.js"></script>
+  </body>
+</html>

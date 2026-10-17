@@ -1,0 +1,13 @@
+{
+  "extends": "../../../../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["./*.ts", "./*.js"],
+  "exclude": [],
+  "references": []
+}
