@@ -31,12 +31,13 @@ The composer freezes the entire batch synchronously before its first await, incl
 
 ## Internal boundary
 
-- `annotation-domain.ts`: explicit source/thread/comment/batch contracts, boundary validation, canonical source keys, snapshot fingerprint and ordered prompt formatting. JSON document contracts use object aliases to remain compatible with Pi's `JsonObject` boundary.
+- `annotation-domain.ts`: explicit source/thread/comment/batch contracts, boundary validation, canonical source keys, whole-field matching, snapshot fingerprint and ordered prompt formatting. JSON document contracts use object aliases to remain compatible with Pi's `JsonObject` boundary.
 - `server.ts`: validated actions, atomic acceptance and durable outbox.
 - `annotation-drafts.ts`: local browser draft persistence, synchronous freezing and uncertain-send retry.
 - `annotation-client.tsx`: SDK composer transport and shared browser draft stores.
 - `annotation-sources.tsx`: stored-entry provenance and text/image selection without replacing core renderers.
-- `annotation-overlay.tsx`: selection-change tracking, beside-source editor and source-marker portals. Pointer activation preserves the selected quote until click, including touch.
+- `connect-annotation-dom.ts`: native selection/table listeners, observed source mounts and connection-local cleanup, including queued scans. Pointer capture preserves the selected quote until click, including touch.
+- `annotation-overlay.tsx`: React state, beside-source editor, source-marker portals and open-thread events.
 - `annotation-cards.tsx`: editable composer cards and this extension's submitted-input cards.
 - `web.tsx`: project-local contributions.
 

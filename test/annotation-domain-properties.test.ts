@@ -4,6 +4,7 @@ import {
   annotationExcerptKey,
   annotationSourceKey,
   parseAnnotationSource,
+  sameAnnotationField,
 } from '../.ultimate/extensions/conversation-annotations/annotation-domain.ts'
 import type { AnnotationLocation } from '../.ultimate/extensions/conversation-annotations/annotation-domain.ts'
 import {
@@ -28,6 +29,98 @@ const identity = fc.record({
   quote: annotationText,
   content: annotationText,
   title: annotationText,
+})
+
+it('matches labelled whole-field transformations without merging owners, kinds or distinct fields', () => {
+  fc.assert(
+    fc.property(identity, ({ owner, entry, call, record, field, image }) => {
+      const tool: AnnotationLocation = {
+        kind: 'tool',
+        conversationId: owner,
+        entryId: entry,
+        toolCallId: call,
+      }
+      const entrySource: AnnotationLocation = {
+        kind: 'entry',
+        conversationId: owner,
+        entryId: entry,
+      }
+      const plan: AnnotationLocation = {
+        kind: 'plan',
+        conversationId: owner,
+        document: 'ultimate.plan',
+        record,
+        field,
+      }
+      const cases: {
+        label: string
+        left: AnnotationLocation
+        right: AnnotationLocation
+        matches: boolean
+      }[] = [
+        {
+          label: 'tool:entry-placement',
+          left: tool,
+          right: { ...tool, entryId: entry + 1 },
+          matches: true,
+        },
+        { label: 'tool:image-zero', left: tool, right: { ...tool, imageIndex: 0 }, matches: true },
+        {
+          label: 'tool:image-positive',
+          left: tool,
+          right: { ...tool, imageIndex: image },
+          matches: true,
+        },
+        {
+          label: 'tool:image-and-entry',
+          left: { ...tool, imageIndex: 0 },
+          right: { ...tool, entryId: entry + 1, imageIndex: image },
+          matches: true,
+        },
+        {
+          label: 'tool:other-call',
+          left: tool,
+          right: { ...tool, toolCallId: `${call}!` },
+          matches: false,
+        },
+        { label: 'entry:same', left: entrySource, right: { ...entrySource }, matches: true },
+        {
+          label: 'entry:other-entry',
+          left: entrySource,
+          right: { ...entrySource, entryId: entry + 1 },
+          matches: false,
+        },
+        { label: 'plan:same', left: plan, right: { ...plan }, matches: true },
+        {
+          label: 'plan:other-record',
+          left: plan,
+          right: { ...plan, record: `${record}0` },
+          matches: false,
+        },
+        {
+          label: 'plan:other-field',
+          left: plan,
+          right: { ...plan, field: `${field}!` },
+          matches: false,
+        },
+        { label: 'kind:entry-tool', left: entrySource, right: tool, matches: false },
+        { label: 'kind:entry-plan', left: entrySource, right: plan, matches: false },
+        { label: 'kind:tool-plan', left: tool, right: plan, matches: false },
+        ...[tool, entrySource, plan].map((location) => ({
+          label: `${location.kind}:other-owner`,
+          left: location,
+          right: { ...location, conversationId: owner + 1 },
+          matches: false,
+        })),
+      ]
+      for (const { label, left, right, matches } of cases) {
+        expect({ label, matches: sameAnnotationField(left, right) }).toEqual({ label, matches })
+        expect({ label, matches: sameAnnotationField(right, left) }).toEqual({ label, matches })
+        count(`field:${label}`)
+      }
+    }),
+    annotationSearch(),
+  )
 })
 
 it('partitions public source/excerpt keys by kind, owner and exact quote, not views or tool entry placement', () => {

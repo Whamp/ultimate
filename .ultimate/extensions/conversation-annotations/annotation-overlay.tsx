@@ -4,34 +4,16 @@ import { createPortal } from 'react-dom'
 import { events, useConversation, useDoc, useEvent } from '@/sdk'
 import { AnnotationQuote } from './annotation-cards.tsx'
 import { annotationDraftStore, useAnnotationDrafts } from './annotation-client.tsx'
-import { annotationExcerptKey, annotationSourceKey } from './annotation-domain.ts'
-import type { AnnotationSource, AnnotationState, AnnotationThread } from './annotation-domain.ts'
 import {
-  ANNOTATION_EXCLUDED,
-  annotationElementSource,
-  selectedAnnotationSource,
-} from './annotation-sources.tsx'
+  annotationExcerptKey,
+  annotationSourceKey,
+  sameAnnotationField,
+} from './annotation-domain.ts'
+import type { AnnotationState, AnnotationThread } from './annotation-domain.ts'
+import { annotationElementSource } from './annotation-sources.tsx'
 import type { AnnotationEditorRequest } from './annotation-sources.tsx'
-
-interface SourceMount {
-  element: HTMLElement
-  mount: HTMLElement
-}
-interface SelectionControl {
-  request: AnnotationEditorRequest
-  rect: DOMRect
-  wholeTable?: boolean
-}
-
-function sameField(source: AnnotationSource, current: AnnotationSource): boolean {
-  if (source.location.kind === 'tool' && current.location.kind === 'tool') {
-    return (
-      source.location.conversationId === current.location.conversationId &&
-      source.location.toolCallId === current.location.toolCallId
-    )
-  }
-  return annotationSourceKey(source.location) === annotationSourceKey(current.location)
-}
+import { connectAnnotationDom } from './connect-annotation-dom.ts'
+import type { SelectionControl, SourceMount } from './connect-annotation-dom.ts'
 
 /** Permanent, quiet source markers; the count is submitted user comments, never inferred agent replies. */
 function ThreadMarkers({
@@ -42,7 +24,9 @@ function ThreadMarkers({
   threads: AnnotationThread[]
 }) {
   const current = annotationElementSource(element, '')
-  const matching = current ? threads.filter((thread) => sameField(thread.source, current)) : []
+  const matching = current
+    ? threads.filter((thread) => sameAnnotationField(thread.source.location, current.location))
+    : []
   if (!matching.length) {
     return null
   }
@@ -91,117 +75,7 @@ function ConversationAnnotationOverlay({ conversationId }: { conversationId: num
     if (!node) {
       return undefined
     }
-    let active = true
-    const attached = new Map<HTMLElement, HTMLElement>()
-    let scheduled = false
-    const scan = () => {
-      scheduled = false
-      if (!active) {
-        return
-      }
-      let changed = false
-      for (const [element, mount] of attached) {
-        if (!element.isConnected) {
-          mount.remove()
-          attached.delete(element)
-          changed = true
-        }
-      }
-      for (const element of document.querySelectorAll<HTMLElement>(
-        '[data-annotation-field],[data-annotation-entry]',
-      )) {
-        if (element.closest('[data-annotation-ui]') || attached.has(element)) {
-          continue
-        }
-        const mount = document.createElement('div')
-        mount.dataset.annotationUi = ''
-        element.after(mount)
-        attached.set(element, mount)
-        changed = true
-      }
-      if (changed) {
-        setMounts([...attached].map(([element, mount]) => ({ element, mount })))
-      }
-    }
-    const schedule = () => {
-      if (!scheduled) {
-        scheduled = true
-        queueMicrotask(scan)
-      }
-    }
-    const observer = new MutationObserver(schedule)
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: [
-        'data-annotation-content',
-        'data-annotation-entry',
-        'data-annotation-field',
-      ],
-    })
-    const onSelection = (event: Event) => {
-      // Whole-table actions have no text range; do not clear them on their own mouseup.
-      if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
-        return
-      }
-      const current = window.getSelection()
-      const selected = selectedAnnotationSource(current)
-      const range = current?.rangeCount ? current.getRangeAt(0) : undefined
-      setSelection(
-        selected && range ? { request: selected, rect: range.getBoundingClientRect() } : undefined,
-      )
-    }
-    const onPointer = (event: MouseEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        event.target.closest(ANNOTATION_EXCLUDED) ||
-        !window.getSelection()?.isCollapsed
-      ) {
-        return
-      }
-      const table = event.target.closest('table')
-      if (!table) {
-        return
-      }
-      const element = table.closest<HTMLElement>('[data-annotation-field],[data-annotation-entry]')
-      const source = element ? annotationElementSource(element, table.innerText) : undefined
-      if (source && element) {
-        setSelection({
-          request: { source, element },
-          rect: table.getBoundingClientRect(),
-          wholeTable: true,
-        })
-      }
-    }
-    // Floating annotation controls must not dismiss the plan popover that owns their source.
-    const keepSourceOpen = (event: PointerEvent) => {
-      if (event.target instanceof Element && event.target.closest('[data-annotation-floating]')) {
-        if (event.target.closest('button[data-annotation-floating]')) {
-          // Capture stops React's pointer handler; preserve the quote here before touch defaults.
-          event.preventDefault()
-        }
-        event.stopPropagation()
-      }
-    }
-    document.addEventListener('pointerdown', keepSourceOpen, true)
-    document.addEventListener('selectionchange', onSelection)
-    document.addEventListener('mouseup', onSelection)
-    document.addEventListener('keyup', onSelection)
-    document.addEventListener('mouseover', onPointer)
-    scan()
-    return () => {
-      active = false
-      observer.disconnect()
-      document.removeEventListener('pointerdown', keepSourceOpen, true)
-      document.removeEventListener('selectionchange', onSelection)
-      document.removeEventListener('mouseup', onSelection)
-      document.removeEventListener('keyup', onSelection)
-      document.removeEventListener('mouseover', onPointer)
-      for (const mount of attached.values()) {
-        mount.remove()
-      }
-    }
+    return connectAnnotationDom({ onMounts: setMounts, onSelection: setSelection })
   }, [])
   const threads = Object.values(history?.threads ?? {})
   return (
