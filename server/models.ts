@@ -8,6 +8,7 @@ export async function listModels(
   runtime: ModelRuntime,
   faux?: FauxProviderHandle,
 ): Promise<ModelsResponse> {
+  await runtime.refresh({ allowNetwork: false })
   const available = new Set(
     (await runtime.getAvailable()).map((model) => `${model.provider}/${model.id}`),
   )
