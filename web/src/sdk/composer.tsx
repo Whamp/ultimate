@@ -1,7 +1,10 @@
 import { createContext, useContext } from 'react'
 import type { KeyboardEvent } from 'react'
 
+/** Local draft editor scope; providing it does not enable any submission transport. */
 export const ComposerContext = createContext<{
+  /** Inventory scope owned by this editor; null means project context, never the shown conversation. */
+  conversationId?: number | null
   /** The editor owning these slots; absent outside a mounted composer. */
   editor?: ComposerEditor
   /** Text-only draft access; clear preserves edits made after the snapshot. */

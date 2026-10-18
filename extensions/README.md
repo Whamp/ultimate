@@ -30,6 +30,12 @@ state before awaiting and resolve only after durable acceptance. Multiple pendin
 silently dropping one. Use `composer.attachments` for pending cards above the textarea. `useComposerEditor()` gives
 inline controls selection, replacement, key handling and listbox ARIA registration without DOM listeners.
 
+A separate message editor can use `useComposerTextarea({ text, read, update })` for the same UTF-16 selection,
+replacement, focus, IME and ARIA behavior. Spread its `textarea` bindings and call `handleKeyDown(event)` before the
+owner's Send handler; a true result means the key is already handled or belongs to IME. Provide `ComposerContext`
+with `editor` and the owner's `conversationId` (`null` for project inventory). The hook owns no persistence or send
+route. Board mounts only `board.suggestions` under this provider, never the generic composer slots or pending sends.
+
 An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
 narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering

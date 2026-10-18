@@ -3,8 +3,10 @@ import { ArrowUpIcon, MessagesSquareIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  ComposerContext,
   Header,
   Sidebar,
+  Slot,
   StatusLine,
   api,
   defineWebExtension,
@@ -13,6 +15,7 @@ import {
   useAction,
   useConversation,
   useConversations,
+  useComposerTextarea,
   useDocOf,
   useEvent,
   useUiState,
@@ -146,12 +149,16 @@ function BoardSurface() {
   const open = waits(board.messages, perspective)
   const [draft, setDraft] = useUiState<string>('board.draft', '')
   const [re, setRe] = useState<number>()
-  const [caret, setCaret] = useState(0)
   const [selected, setSelected] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const feed = useRef<HTMLDivElement>(null)
-  const input = useRef<HTMLTextAreaElement>(null)
+  const { editor, textarea, handleKeyDown } = useComposerTextarea({
+    text: draft,
+    read: () => ({ text: draft, readOnly: busy }),
+    update: setDraft,
+  })
+  const caret = editor.selection.start
   const following = useRef(true)
   const count = unreadCount(board)
   const messages = (
@@ -176,15 +183,8 @@ function BoardSurface() {
       .catch((failure: Error) => setError(failure.message))
   }, [tab, latest, board.readUpTo])
   function choose(value: NonNullable<typeof choice>) {
-    const next = draft.slice(0, value.start) + value.token + ' ' + draft.slice(caret)
-    setDraft(next)
-    const position = value.start + value.token.length + 1
-    setCaret(position)
+    editor.replace({ start: value.start, end: caret }, value.token + ' ')
     setSelected(0)
-    requestAnimationFrame(() => {
-      input.current?.focus()
-      input.current?.setSelectionRange(position, position)
-    })
   }
   async function send() {
     if (busy) return
@@ -202,7 +202,6 @@ function BoardSurface() {
     try {
       await api.action('board', 'post', { ...parsed, ...(re === undefined ? {} : { re }) })
       setDraft('')
-      setCaret(0)
       setRe(undefined)
       following.current = true
     } catch (failure) {
@@ -244,10 +243,8 @@ function BoardSurface() {
               setTab('all')
             }}
             onMention={(address) => {
-              setDraft(`${address} `)
-              setCaret(address.length + 1)
+              editor.replace({ start: 0, end: draft.length }, `${address} `)
               setRe(undefined)
-              input.current?.focus()
             }}
           />
           {active && (
@@ -321,10 +318,8 @@ function BoardSurface() {
                       : message.from === addresses.data?.lander
                         ? '@lander'
                         : `#${message.from}`
-                    setDraft(`${address} `)
+                    editor.replace({ start: 0, end: draft.length }, `${address} `)
                     setRe(message.id)
-                    setCaret(address.length + 1)
-                    input.current?.focus()
                   }}
                 />
               ))}
@@ -341,6 +336,9 @@ function BoardSurface() {
                 {addresses.error.message}
               </p>
             )}
+            <ComposerContext value={{ conversationId: null, editor }}>
+              <Slot name="board.suggestions" />
+            </ComposerContext>
             <div className="relative rounded-xl border border-border bg-muted/20 focus-within:border-brand/50">
               {replyTo && (
                 <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-[12px] text-muted-foreground">
@@ -376,7 +374,7 @@ function BoardSurface() {
                 </div>
               )}
               <textarea
-                ref={input}
+                {...textarea}
                 aria-label="Board message"
                 rows={2}
                 value={draft}
@@ -388,13 +386,11 @@ function BoardSurface() {
                 }
                 className="block max-h-48 min-h-20 w-full resize-none field-sizing-content bg-transparent px-3 pt-3 pb-1 text-[14px] outline-none placeholder:text-muted-foreground/70"
                 onChange={(event) => {
-                  setDraft(event.target.value)
-                  setCaret(event.target.selectionStart)
+                  textarea.onChange(event)
                   setSelected(0)
                 }}
-                onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
                 onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing) return
+                  if (handleKeyDown(event)) return
                   if (choices.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
                     event.preventDefault()
                     setSelected(

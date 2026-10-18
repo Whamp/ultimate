@@ -121,5 +121,6 @@ export type {
   UserMessage,
 } from '@earendil-works/pi-ai'
 
-export { useComposer, useComposerEditor } from './composer.tsx'
+export { ComposerContext, useComposer, useComposerEditor } from './composer.tsx'
+export { useComposerTextarea } from './composer-textarea.ts'
 export type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from './composer.tsx'

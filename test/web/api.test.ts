@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ActionError, createApi, MachineOfflineError } from '../../web/src/sdk/api.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
+import { skillPickerRequest } from '../../extensions/skill-picker/skill-picker-client.tsx'
 
 function setup(respond: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) =>
@@ -48,6 +49,29 @@ describe('extension actions', () => {
       { args: null },
       { args: { source: 9 } },
       { args: null, conversationId: 37 },
+    ])
+  })
+
+  it('serializes Board picker inventory without the last shown Agent context', async () => {
+    const requests: string[] = []
+    const store = createStore()
+    store.show(37)
+    const api = createApi(store, {
+      fetch: async (_url, init) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected a serialized action request')
+        requests.push(init.body)
+        return json(200, { result: [] })
+      },
+    })
+    for (const editorContext of [null, 19]) {
+      const request = skillPickerRequest(editorContext)
+      await api.action('skill-picker', 'list', request.args, {
+        conversationId: request.conversationId,
+      })
+    }
+    expect(requests.map((body) => JSON.parse(body))).toEqual([
+      { args: null },
+      { args: null, conversationId: 19 },
     ])
   })
 

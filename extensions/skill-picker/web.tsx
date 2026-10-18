@@ -7,8 +7,8 @@ import {
   defineWebExtension,
   errorMessage,
   useAction,
+  useComposer,
   useComposerEditor,
-  useConversation,
 } from '@/sdk'
 import type { ComposerEditor } from '@/sdk'
 import {
@@ -41,8 +41,8 @@ function SkillMenu({
   query: SkillPickerQuery
   dismiss: () => void
 }) {
-  const conversation = useConversation()
-  const request = skillPickerRequest('conversation', conversation.id)
+  const { conversationId } = useComposer()
+  const request = skillPickerRequest(conversationId)
   const skills = useAction<SkillPickerSkill[]>('skill-picker', 'list', request.args, {
     conversationId: request.conversationId,
     // Errors belong in this menu, not in a second global notice.
@@ -187,5 +187,8 @@ function SkillMenu({
 }
 
 export default defineWebExtension({
-  slots: { 'composer.attachments': { component: SkillPicker, order: -100 } },
+  slots: {
+    'composer.attachments': { component: SkillPicker, order: -100 },
+    'board.suggestions': { component: SkillPicker, order: -100 },
+  },
 })

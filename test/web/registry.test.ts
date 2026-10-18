@@ -227,6 +227,36 @@ describe('web extension registry', () => {
     expect(composerRenderers(registry.getSnapshot()).map((item) => item.component)).toEqual([First])
   })
 
+  it('keeps Board suggestions separate from conversation attachments and pending transports', async () => {
+    const Suggestions = component('skills')
+    const Attachments = component('annotations')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('skill-picker')]: async () =>
+        module({
+          slots: { 'board.suggestions': Suggestions, 'composer.attachments': Suggestions },
+        }),
+      [path('annotations')]: async () =>
+        module({
+          slots: { 'composer.attachments': Attachments },
+          composerSubmission: {
+            subscribe: () => () => {},
+            pending: () => true,
+            submit: async () => {},
+          },
+        }),
+    })
+    expect(
+      slotItems(registry.getSnapshot(), 'board.suggestions').map((item) => item.component),
+    ).toEqual([Suggestions])
+    expect(
+      slotItems(registry.getSnapshot(), 'composer.attachments').map((item) => item.component),
+    ).toEqual([Suggestions, Attachments])
+    expect(composerSubmissions(registry.getSnapshot()).map((item) => item.extension)).toEqual([
+      'annotations',
+    ])
+  })
+
   it('resolves command ids like surface ids: a later facet wins, in the place of the first', async () => {
     const registry = createRegistry()
     await registry.setLoaders({
