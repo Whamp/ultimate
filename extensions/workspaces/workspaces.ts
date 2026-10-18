@@ -479,10 +479,25 @@ export function workspaces(host: Host) {
     if (signal?.aborted) return kept
     const graph = await candidates(ids, context)
     const retained = new Map<number, number>()
+    function retainAncestors(id: number) {
+      for (
+        let parent = graph.parents.get(id);
+        parent !== undefined;
+        parent = graph.parents.get(parent)
+      )
+        retained.set(parent, id)
+    }
     for (const id of graph.ids) {
       if (signal?.aborted) break
       const record = await get(id, context)
-      if (!record) continue
+      if (!record) {
+        const reason = await busy(id, context)
+        if (reason) {
+          kept.push({ id, uncommitted: 0, unlanded: 0, busy: reason })
+          retainAncestors(id)
+        }
+        continue
+      }
       await serial(record.source, async () => {
         if (signal?.aborted) return
         const workspace = (await get(id, context))!
@@ -533,13 +548,7 @@ export function workspaces(host: Host) {
         const remaining = await finishRemoval(id, workspace, context)
         if (remaining) kept.push(remaining)
       })
-      if (kept.some((item) => item.id === id))
-        for (
-          let parent = graph.parents.get(id);
-          parent !== undefined;
-          parent = graph.parents.get(parent)
-        )
-          retained.set(parent, id)
+      if (kept.some((item) => item.id === id)) retainAncestors(id)
     }
     return kept
   }

@@ -257,6 +257,70 @@ async function call(opened: OpenHost, args: Record<string, unknown>) {
   view.dispose()
   return { tool, text }
 }
+it.each(['available', 'disabled', 'missing'] as const)(
+  'child creation admits only available deferred capabilities: %s',
+  async (availability) => {
+    let calls = 0
+    const f = await fixture(
+      defineExtension({
+        name: 'deferred-capability',
+        tools: [
+          defineTool({
+            name: 'lookup',
+            description: 'Read a deferred capability',
+            parameters: Type.Object({}),
+            deferred: true,
+            execute: async () => {
+              calls++
+              return { output: [{ type: 'text', text: 'capability reached' }] }
+            },
+          }),
+        ],
+      }),
+      undefined,
+      undefined,
+      (transcript) =>
+        transcript.messages.at(-1)?.content === 'USE DEFERRED'
+          ? fauxAssistantMessage(fauxToolCall('lookup', {}), { stopReason: 'toolUse' })
+          : undefined,
+    )
+    const tool = availability === 'missing' ? 'unavailable' : 'lookup'
+    await writeFile(
+      join(f.ultimateRoot, 'agents/scout.md'),
+      definition().replace('tools: [read, bash]', `tools: [${tool}]`),
+    )
+    if (availability === 'disabled') {
+      const lookup = (await f.opened.root.agent(context)).deferred.find(
+        (entry) => entry.name === tool,
+      )!
+      await f.opened.root.configure({ tools: { remove: [lookup] } }, context)
+    }
+    const parent = await f.opened.root.agent(context)
+    expect(parent.tools.map((entry) => entry.name)).not.toContain(tool)
+    expect(parent.deferred.map((entry) => entry.name).includes(tool)).toBe(
+      availability === 'available',
+    )
+    const result = await call(f.opened, { action: 'start', agent: 'scout', task: 'USE DEFERRED' })
+    const created = await children(f.opened)
+    const message = result.tool.model?.[0]
+    expect(message?.role).toBe('toolResult')
+    expect(message?.role === 'toolResult' && message.isError).toBe(availability !== 'available')
+    const childTools = await Promise.all(
+      created.map(async (entry) => {
+        const child = (await f.opened.harness.conversation(entry.conversationId, context))!
+        return (await child.agent(context)).tools.map((capability) => capability.name)
+      }),
+    )
+    expect(childTools).toEqual(availability === 'available' ? [['lookup']] : [])
+    expect(result.text).toContain(
+      availability === 'available'
+        ? 'capability reached'
+        : 'Definition tools must be a subset of parent tools',
+    )
+    expect(calls).toBe(availability === 'available' ? 1 : 0)
+  },
+)
+
 it('runs root -> forked review lead -> parallel leaves -> lead -> root with scoped ownership', async () => {
   const range = `${'a'.repeat(40)}..${'b'.repeat(40)}`
   const task = `Review ${range}; acceptance: read-only review`
