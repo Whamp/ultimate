@@ -12,7 +12,7 @@ import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
 import { PROJECT_MISMATCH } from './protocol.ts'
-import { parseModelsResponse } from './models-response.ts'
+import { parseModelsResponse } from './parseModelsResponse.ts'
 import type { MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'

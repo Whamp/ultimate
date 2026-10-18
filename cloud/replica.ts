@@ -1,7 +1,7 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type { CloudMessage, MachineMessage, OutboxItem } from './protocol.ts'
 import type { ConversationSummary, ModelsResponse } from '../shared/protocol.ts'
-import { parseModelsResponse } from './models-response.ts'
+import { parseModelsResponse } from './parseModelsResponse.ts'
 
 /** The common subset of Durable Object SQL and a node:sqlite adapter. */
 export interface Sql {
