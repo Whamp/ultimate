@@ -96,6 +96,14 @@ export function annotationSourceKey(location: AnnotationLocation): string {
   return JSON.stringify(['entry', location.conversationId, location.entryId])
 }
 
+/** Whole-field matching groups tool images and entry placements, not distinct excerpt identities. */
+export function sameAnnotationField(left: AnnotationLocation, right: AnnotationLocation): boolean {
+  if (left.kind === 'tool' && right.kind === 'tool') {
+    return left.conversationId === right.conversationId && left.toolCallId === right.toolCallId
+  }
+  return annotationSourceKey(left) === annotationSourceKey(right)
+}
+
 /** View-independent excerpt identity; surrounding field edits do not create a different thread. */
 export function annotationExcerptKey(source: AnnotationSource): string {
   return JSON.stringify([annotationSourceKey(source.location), source.quote])

@@ -22,6 +22,7 @@
     ".ultimate/extensions/**/*.tsx",
     ".ultimate/extensions/conversation-annotations/annotation-domain.ts",
     ".ultimate/extensions/conversation-annotations/annotation-drafts.ts",
+    ".ultimate/extensions/conversation-annotations/connect-annotation-dom.ts",
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
     "extensions/phase/types.ts",

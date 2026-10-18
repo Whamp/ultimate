@@ -2,7 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { MessageSquareIcon, RotateCwIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import { api, events, useComposer, useConversation, useDoc } from '@/sdk'
-import { annotationBreadcrumb, annotationSourceKey } from './annotation-domain.ts'
+import { annotationBreadcrumb, sameAnnotationField } from './annotation-domain.ts'
 import type { AnnotationSource, AnnotationState } from './annotation-domain.ts'
 import { annotationDraftStore, useAnnotationDrafts } from './annotation-client.tsx'
 import { annotationElementSource } from './annotation-sources.tsx'
@@ -10,22 +10,11 @@ import type { AnnotationEditorRequest } from './annotation-sources.tsx'
 
 /** Locate the same logical source in any currently mounted view; original snapshots are never replaced. */
 export function findAnnotationElement(source: AnnotationSource): HTMLElement | undefined {
-  const location = source.location
-  const key = annotationSourceKey(location)
   return [
     ...document.querySelectorAll<HTMLElement>('[data-annotation-field],[data-annotation-entry]'),
   ].find((element) => {
     const current = annotationElementSource(element, '')
-    if (!current) {
-      return false
-    }
-    if (location.kind === 'tool' && current.location.kind === 'tool') {
-      return (
-        current.location.toolCallId === location.toolCallId &&
-        current.location.conversationId === location.conversationId
-      )
-    }
-    return annotationSourceKey(current.location) === key
+    return current ? sameAnnotationField(source.location, current.location) : false
   })
 }
 
