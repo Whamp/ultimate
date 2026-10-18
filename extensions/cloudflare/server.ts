@@ -23,7 +23,7 @@ type Result = {
   traces?: Row[]
 }
 
-export default function cloudflare(host: ExtensionHost) {
+export default function cloudflare(host: Pick<ExtensionHost, 'userHome' | 'extensions'>) {
   return defineExtension({
     name: 'cloudflare',
     tools: [

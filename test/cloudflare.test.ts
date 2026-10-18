@@ -1,40 +1,15 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import cloudflare, { secrets } from '../extensions/cloudflare/server.ts'
-import { writeSecret } from '../extensions/secrets/store.ts'
+import { secrets } from '../extensions/cloudflare/server.ts'
 import { parseDefinition, definitionAgent } from '../extensions/subagents/agents.ts'
-import type { ExtensionHost } from '../server/extensions.ts'
-import { removeTemp, temp } from './helpers.ts'
+import {
+  cloudflareFixture as fixture,
+  CLOUDFLARE_TEST_TOKEN as token,
+  CLOUDFLARE_TEST_ARGS as args,
+} from './test-utils/cloudflare-fixture.ts'
 
-const cleanup: string[] = []
-afterEach(async () => {
-  vi.unstubAllGlobals()
-  for (const root of cleanup.splice(0)) await removeTemp(root)
-})
-const token = 'synthetic-cloudflare-credential'
-const args = { worker: 'example-worker', from: 1000, to: 2000 }
-async function fixture(key = true, enabled = true) {
-  const root = await temp()
-  cleanup.push(root)
-  if (key) await writeSecret(root, 'CLOUDFLARE_API_TOKEN', token)
-  const tool = cloudflare({
-    userHome: root,
-    extensions: () => (enabled ? [{ name: 'secrets', enabled: true, server: {} }] : []),
-  } as unknown as ExtensionHost).tools![0]
-  return {
-    root,
-    tool,
-    run: async (input: unknown = args) => {
-      const result = await tool.execute(
-        input as never,
-        {} as never,
-        { abortSignal: new AbortController().signal } as never,
-      )
-      return (result.output![0] as { text: string }).text
-    },
-  }
-}
+afterEach(() => vi.unstubAllGlobals())
 function mock(
   result: unknown = { events: { count: 0, events: [] } },
   accounts = [{ id: 'account-one' }],
@@ -239,11 +214,12 @@ it('parses the resident definition and enables its deferred tool', async () => {
     'automation',
     'cloudflare_observability',
   ])
-  const { tool } = await fixture(false)
+  const f = await fixture(false)
+  const { tool } = f
   const configured = definitionAgent(
     { ...definition, model: undefined },
-    { tools: [], deferred: [tool], extensions: [] } as never,
-    {} as never,
+    await f.agent(),
+    await f.modelRuntime(),
   )
   expect(configured.modelTools).toEqual({ add: [tool] })
 })

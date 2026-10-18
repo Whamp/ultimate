@@ -1,6 +1,7 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type { CloudMessage, MachineMessage, OutboxItem } from './protocol.ts'
-import type { ConversationSummary } from '../shared/protocol.ts'
+import type { ConversationSummary, ModelsResponse } from '../shared/protocol.ts'
+import { parseModelsResponse } from './models-response.ts'
 
 /** The common subset of Durable Object SQL and a node:sqlite adapter. */
 export interface Sql {
@@ -51,6 +52,11 @@ export class ReplicaStore {
   }
   metadata(id: number): unknown {
     return this.get('metadata', id)
+  }
+  /** The offline browser uses the same models response as the machine, including an empty initial catalog. */
+  models(): ModelsResponse {
+    const value = this.metadata(3)
+    return value === undefined ? { providers: [], models: [] } : parseModelsResponse(value)
   }
   identity(): { machine: string; project: string; port: number; uiBuild?: string } | undefined {
     return this.metadata(5) as ReturnType<ReplicaStore['identity']>
@@ -201,6 +207,10 @@ export class ReplicaStore {
       case 'delivered':
         this.sql.exec('DELETE FROM outbox WHERE id=?', message.id)
         break
+      default: {
+        const unhandled: never = message
+        throw new Error('Unhandled cloud machine message', { cause: unhandled })
+      }
     }
     return []
   }

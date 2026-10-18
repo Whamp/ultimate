@@ -1,20 +1,15 @@
 import './front.css'
 import { cn } from 'cn'
-import { StrictMode, useEffect, useState } from 'react'
+import { StrictMode, useSyncExternalStore } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
-/** A row of `/api/directory` (`Instance` in cloud/directory.ts, which runs in the Worker). */
-interface Instance {
-  machine: string
-  project: string
-  slug: string
-  connected: boolean
-  lastSeen: number
-  count: number
-}
+import { DirectoryPolling } from './directory-polling.ts'
+import type { DirectoryInstance as Instance } from './directory-polling.ts'
+
+const DIRECTORY_POLLING = new DirectoryPolling()
 
 /** `just now`, `5m ago`, `3h ago`, `2d ago`: the app's compact relative times. */
 function ago(at: number, now: number) {
@@ -26,8 +21,6 @@ function ago(at: number, now: number) {
 }
 
 const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
-
-type Directory = { state: 'loading' } | { state: 'failed' } | { state: 'loaded'; rows: Instance[] }
 
 /** Up and down move between rows, as in a list; Tab still walks them in order. */
 function moveFocus(event: KeyboardEvent<HTMLElement>) {
@@ -111,25 +104,10 @@ function Message({ children }: { children: ReactNode }) {
 
 /** The directory from `/api/directory`, behind Access, refreshed every 10 s. A failed refresh keeps the last list. */
 function Front() {
-  const [directory, setDirectory] = useState<Directory>({ state: 'loading' })
-  const [failing, setFailing] = useState(false)
-  useEffect(() => {
-    async function refresh() {
-      try {
-        const response = await fetch('/api/directory')
-        if (!response.ok) throw new Error(`${response.status}`)
-        setDirectory({ state: 'loaded', rows: (await response.json()) as Instance[] })
-        setFailing(false)
-      } catch {
-        // Signed out or unreachable: say so, and keep what was loaded until the next refresh succeeds.
-        setFailing(true)
-        setDirectory((previous) => (previous.state === 'loaded' ? previous : { state: 'failed' }))
-      }
-    }
-    void refresh()
-    const timer = setInterval(() => void refresh(), 10000)
-    return () => clearInterval(timer)
-  }, [])
+  const { directory, failing } = useSyncExternalStore(
+    DIRECTORY_POLLING.subscribe,
+    DIRECTORY_POLLING.getSnapshot,
+  )
   const now = Date.now()
   const machines = new Map<string, Instance[]>()
   if (directory.state === 'loaded')

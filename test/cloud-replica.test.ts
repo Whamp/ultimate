@@ -7,6 +7,10 @@ import type { Sql } from '../cloud/replica.ts'
 import { DirectoryStore } from '../cloud/directory.ts'
 import { PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
+import { replicaSocket } from './test-utils/replica-socket.ts'
+import { cloudModelsFixture } from './test-utils/cloud-models-fixture.ts'
+import { strictReplicaBinding } from './test-utils/replica-bindings.ts'
+import type { ReplicaStateFixture, ReplicaEnvFixture } from './test-utils/replica-bindings.ts'
 
 const databases: DatabaseSync[] = []
 afterEach(() => {
@@ -53,9 +57,7 @@ function worker(online = false) {
   })
   instance.store.receive(hello('/test'))
   vi.spyOn(instance, 'sockets').mockReturnValue(
-    online
-      ? [{ send: vi.fn<() => void>() } as unknown as ReturnType<ProjectReplica['sockets']>[number]]
-      : [],
+    online ? [replicaSocket({ send: vi.fn<() => void>() })] : [],
   )
   return instance
 }
@@ -98,10 +100,7 @@ it.each([
   ['{"private":"do not log"', 'unknown'],
 ])('logs only message type and byte size on WebSocket exceptions: %s', (raw, type) => {
   const instance = worker()
-  const socket = {
-    readyState: WebSocket.OPEN,
-    deserializeAttachment: () => true,
-  } as unknown as Parameters<ProjectReplica['webSocketMessage']>[0]
+  const socket = replicaSocket({ deserializeAttachment: () => true })
   Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
   const error = new Error('private exception detail')
   const receive = vi.spyOn(instance.store, 'receive').mockImplementation(() => {
@@ -118,7 +117,7 @@ it.each([
   }
   expect(log).toHaveBeenCalledTimes(2)
   receive.mockReturnValue([])
-  instance.webSocketMessage(socket, '{"type":"models","value":[]}')
+  instance.webSocketMessage(socket, '{"type":"models","value":{"providers":[],"models":[]}}')
   expect(log).toHaveBeenCalledTimes(2)
 })
 
@@ -230,7 +229,7 @@ describe('cloud request admission and fallback', () => {
   })
 })
 
-const hello = (project: string): MachineMessage => ({
+const hello = (project: string): Extract<MachineMessage, { type: 'hello' }> => ({
   type: 'hello',
   machine: 'test',
   port: 4800,
@@ -242,7 +241,7 @@ describe('cloud replica', () => {
   it('records UI builds from hello and updates and reports them to the Directory', async () => {
     const instance = worker()
     const directory = new DirectoryStore(replica().sql)
-    const socket = { readyState: WebSocket.OPEN, deserializeAttachment: () => true, send() {} }
+    const socket = replicaSocket({ deserializeAttachment: () => true })
     const pending: Promise<unknown>[] = []
     Object.assign(instance, {
       ctx: {
@@ -261,12 +260,9 @@ describe('cloud replica', () => {
         },
       },
     })
-    instance.store.receive({ ...hello('/test'), uiBuild: '0123456789ab' } as MachineMessage)
+    instance.store.receive({ ...hello('/test'), uiBuild: '0123456789ab' })
     expect(instance.store.identity()?.uiBuild).toBe('0123456789ab')
-    instance.webSocketMessage(
-      socket as unknown as Parameters<ProjectReplica['webSocketMessage']>[0],
-      JSON.stringify({ type: 'uiBuild', value: '1123456789ab' }),
-    )
+    instance.webSocketMessage(socket, JSON.stringify({ type: 'uiBuild', value: '1123456789ab' }))
     await Promise.all(pending)
     expect(instance.store.identity()?.uiBuild).toBe('1123456789ab')
     expect(directory.resolve('test/test')?.uiBuild).toBe('1123456789ab')
@@ -310,12 +306,11 @@ describe('cloud replica', () => {
     Object.assign(instance, {
       env: { DIRECTORY: { idFromName: () => 'directory', get: () => ({ fetch: update }) } },
     })
-    const socket = {
-      readyState: WebSocket.OPEN,
+    const socket = replicaSocket({
       deserializeAttachment: () => true,
       send: vi.fn<(value: string) => void>(),
       close: vi.fn<() => void>(),
-    }
+    })
     Object.assign(instance, {
       ctx: {
         getWebSockets: () => [socket],
@@ -324,14 +319,14 @@ describe('cloud replica', () => {
     })
     expect(instance.store.hasEntries()).toBe(false)
     instance.webSocketMessage(
-      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
+      socket,
       JSON.stringify({ type: 'batch', batch: 1, conversations: [], entries: [entry(1)], docs: [] }),
     )
     expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
       hasEntries: true,
       connected: true,
     })
-    instance.webSocketClose(socket as unknown as ReturnType<ProjectReplica['sockets']>[number])
+    instance.webSocketClose(socket)
     expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
       hasEntries: true,
       connected: false,
@@ -358,7 +353,7 @@ describe('cloud replica', () => {
 
   it.each([0, -1, 65536, 4800.5])('never proxies an invalid port %s', async (port) => {
     const instance = worker(true)
-    instance.store.receive({ ...hello('/test'), port } as MachineMessage)
+    instance.store.receive({ ...hello('/test'), port })
     const forward = vi.fn<() => void>()
     vi.stubGlobal('fetch', forward)
     expect((await instance.fetch(new Request('https://cloud.example/api/models'))).status).toBe(200)
@@ -368,16 +363,12 @@ describe('cloud replica', () => {
   it.each([0, 65536, 4800.5])('refuses hello port %s before admitting a socket', (port) => {
     const instance = worker()
     instance.store.claimKey('test', '/test')
-    const socket = {
-      readyState: WebSocket.OPEN,
+    const socket = replicaSocket({
       send: vi.fn<(value: string) => void>(),
       close: vi.fn<(code: number, reason: string) => void>(),
-    }
+    })
     Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
-    instance.webSocketMessage(
-      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
-      JSON.stringify({ ...hello('/test'), port }),
-    )
+    instance.webSocketMessage(socket, JSON.stringify({ ...hello('/test'), port }))
     expect(socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'Machine or project mismatch')
     expect(socket.send).not.toHaveBeenCalled()
   })
@@ -408,8 +399,7 @@ describe('cloud replica', () => {
     instance.store.claimKey('test', '/ultimate')
     const connect = () => {
       let attachment: unknown
-      const socket = {
-        readyState: WebSocket.OPEN as number,
+      const socket = replicaSocket({
         send: vi.fn<(data: string) => void>(),
         close: vi.fn<(code: number, reason: string) => void>(() => {
           socket.readyState = WebSocket.CLOSED
@@ -418,24 +408,19 @@ describe('cloud replica', () => {
           attachment = value
         },
         deserializeAttachment: () => attachment,
-      }
-      sockets.push(socket as unknown as (typeof sockets)[number])
+      })
+      sockets.push(socket)
       const receive = (message: MachineMessage) =>
-        instance.webSocketMessage(
-          socket as unknown as (typeof sockets)[number],
-          JSON.stringify(message),
-        )
+        instance.webSocketMessage(socket, JSON.stringify(message))
       return { socket, receive }
     }
     const update = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
       async () => new Response(),
     )
-    instance.env.DIRECTORY.get = vi.fn<() => { fetch: typeof update }>(() => ({
-      fetch: update,
-    })) as unknown as typeof instance.env.DIRECTORY.get
+    Object.assign(instance.env.DIRECTORY, { get: () => ({ fetch: update }) })
     // The sync route binds this object before hello; wrong machine must not adopt it.
     const wrong = connect()
-    wrong.receive({ ...hello('/ultimate'), machine: 'other' } as MachineMessage)
+    wrong.receive({ ...hello('/ultimate'), machine: 'other' })
     expect(wrong.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'Machine or project mismatch')
     expect(instance.store.metadata(4)).toBeUndefined()
     // Existing dry-run data has no project yet; the first hello adopts it without changing it.
@@ -510,7 +495,7 @@ describe('cloud replica', () => {
       'outbox',
     ])
     expect(first.socket.close).toHaveBeenCalledWith(1000, 'Replaced by new machine connection')
-    instance.webSocketClose(reconnect.socket as unknown as (typeof sockets)[number])
+    instance.webSocketClose(reconnect.socket)
     expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
       connected: false,
       project: '/ultimate',
@@ -520,26 +505,35 @@ describe('cloud replica', () => {
   it('restores socket admission from attachments after hibernation', () => {
     const sql = replica().sql
     const sockets: ReturnType<ProjectReplica['sockets']> = []
-    const ctx = {
-      id: { toString: () => '0123456789abcdef' },
-      storage: { sql, transactionSync: <T>(run: () => T) => sql.transaction(run) },
+    const storageSql: ReplicaStateFixture['storage']['sql'] = {
+      exec: (query, ...bindings) => sql.exec(query, ...bindings),
+    }
+    const ctx: ReplicaStateFixture = strictReplicaBinding({
+      id: strictReplicaBinding({ toString: () => '0123456789abcdef' }),
+      storage: strictReplicaBinding({
+        sql: strictReplicaBinding(storageSql),
+        transactionSync: <T>(run: () => T) => sql.transaction(run),
+      }),
       getWebSockets: () => sockets,
       waitUntil: vi.fn<() => void>(),
-    } as unknown as ConstructorParameters<typeof ProjectReplica>[0]
+    })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const env = {
-      DIRECTORY: {
-        idFromName: () => 'directory',
-        get: () => ({ fetch: async () => new Response() }),
-      },
+    const env: ReplicaEnvFixture = strictReplicaBinding({
+      DIRECTORY: strictReplicaBinding({
+        idFromName: () => strictReplicaBinding({ toString: () => 'directory', equals: () => true }),
+        get: () => strictReplicaBinding({ fetch: async () => new Response() }),
+      }),
       MACHINE_ORIGIN: 'http://127.0.0.1:4800',
-    } as unknown as ConstructorParameters<typeof ProjectReplica>[1]
-    let instance = new ProjectReplica(ctx, env)
+    })
+    // SAFETY: the typed fixture implements each state member used by construction and hibernation; missing members throw.
+    const state = ctx as ConstructorParameters<typeof ProjectReplica>[0]
+    // SAFETY: the typed directory binding accepts real object IDs and implements presence fetch; unused bindings throw.
+    const bindings = env as ConstructorParameters<typeof ProjectReplica>[1]
+    let instance = new ProjectReplica(state, bindings)
     instance.store.claimKey('test', '/ultimate')
     const connect = () => {
       let attachment: unknown
-      const socket = {
-        readyState: WebSocket.OPEN,
+      const socket = replicaSocket({
         send: vi.fn<(data: string) => void>(),
         // A close has been requested, but its callback has not arrived yet.
         close: vi.fn<(code: number, reason: string) => void>(),
@@ -547,8 +541,8 @@ describe('cloud replica', () => {
           attachment = value
         },
         deserializeAttachment: () => attachment,
-      }
-      const machine = socket as unknown as (typeof sockets)[number]
+      })
+      const machine = socket
       sockets.push(machine)
       return {
         socket,
@@ -570,7 +564,7 @@ describe('cloud replica', () => {
     // A fresh object has no sockets and logs nothing; a woken one reports what it still holds.
     expect(log).not.toHaveBeenCalled()
     const previous = instance
-    instance = new ProjectReplica(ctx, env)
+    instance = new ProjectReplica(state, bindings)
     expect(log.mock.calls).toEqual([['Replica woke: object=01234567 sockets=2 admitted=1']])
     log.mockRestore()
     expect(instance).not.toBe(previous)
@@ -620,14 +614,13 @@ describe('cloud replica', () => {
     const instance = worker()
     const held = '/projects/' + '🦀'.repeat(40)
     instance.store.claimProject(held)
-    const socket = {
-      readyState: WebSocket.OPEN,
+    const socket = replicaSocket({
       send: vi.fn<(data: string) => void>(),
       close: vi.fn<(code: number, reason: string) => void>(),
-    }
+    })
     Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
     instance.webSocketMessage(
-      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
+      socket,
       JSON.stringify({
         type: 'hello',
         machine: 'test',
@@ -680,8 +673,10 @@ describe('cloud replica', () => {
   it('rolls a failing batch back atomically', () => {
     const store = replica()
     batch(store, [entry(1)])
-    const bad = { ...entry(3), data: 1n } as unknown as EntryRecord
-    expect(() => batch(store, [entry(2), bad])).toThrow(/BigInt/)
+    store.sql.exec(
+      "CREATE TRIGGER reject_entry BEFORE INSERT ON entries WHEN NEW.id=3 BEGIN SELECT RAISE(ABORT, 'synthetic entry failure'); END",
+    )
+    expect(() => batch(store, [entry(2), entry(3)])).toThrow('synthetic entry failure')
     expect(store.cursor().entries).toEqual({ 1: 1 })
   })
   it('reconstructs plain views, drops live docs and keeps extension docs outside the view', () => {
@@ -861,10 +856,64 @@ describe('cloud replica', () => {
   })
   it('stores the latest metadata', () => {
     const store = replica()
-    store.receive({ type: 'models', value: { models: [] } })
-    store.receive({ type: 'models', value: { models: ['updated'] } })
-    expect(store.metadata(3)).toEqual({ models: ['updated'] })
+    store.receive({ type: 'models', value: { providers: [], models: [] } })
+    const updated = cloudModelsFixture()
+    store.receive({ type: 'models', value: updated })
+    expect(store.models()).toEqual(updated)
   })
+  it.each([
+    null,
+    [],
+    {},
+    { models: [] },
+    { providers: [], models: ['invalid'] },
+    {
+      ...cloudModelsFixture(),
+      providers: [
+        { ...cloudModelsFixture().providers[0], authTypes: [{ type: 'password', name: 'Bad' }] },
+      ],
+    },
+    {
+      ...cloudModelsFixture(),
+      providers: [{ ...cloudModelsFixture().providers[0], status: { configured: 'yes' } }],
+    },
+    {
+      ...cloudModelsFixture(),
+      providers: [
+        { ...cloudModelsFixture().providers[0], status: { configured: true, source: 'invalid' } },
+      ],
+    },
+    {
+      ...cloudModelsFixture(),
+      models: [{ ...cloudModelsFixture().models[0], thinkingLevels: ['invalid'] }],
+    },
+    {
+      ...cloudModelsFixture(),
+      models: [
+        {
+          ...cloudModelsFixture().models[0],
+          cost: { input: 'free', output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    },
+  ])(
+    'rejects malformed models at the admitted WebSocket boundary without replacing the browser response: %j',
+    async (value) => {
+      const instance = worker()
+      const socket = replicaSocket({ deserializeAttachment: () => true })
+      Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
+      const catalog = cloudModelsFixture()
+      instance.webSocketMessage(socket, JSON.stringify({ type: 'models', value: catalog }))
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(() =>
+        instance.webSocketMessage(socket, JSON.stringify({ type: 'models', value })),
+      ).toThrow('Invalid cloud models response')
+      expect(log).toHaveBeenCalledOnce()
+      const response = await instance.fetch(new Request('https://cloud.example/api/models'))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(catalog)
+    },
+  )
   it('rewrites proxy admission headers and preserves method, query and body', async () => {
     const request = new Request('https://cloud.example/api/extensions/test/actions/run?x=1', {
       method: 'POST',

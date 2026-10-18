@@ -12,6 +12,7 @@ import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
 import { PROJECT_MISMATCH } from './protocol.ts'
+import { parseModelsResponse } from './models-response.ts'
 import type { MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
@@ -266,6 +267,7 @@ export class ProjectReplica {
         socket.serializeAttachment(true)
         for (const stream of this.streams) stream.close()
       } else if (socket.deserializeAttachment() !== true) return
+      if (message.type === 'models') message.value = parseModelsResponse(message.value)
       const hasEntries = this.store.hasEntries()
       const count = message.type === 'summaries' ? this.store.summaryCount() : undefined
       for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
@@ -349,7 +351,7 @@ export class ProjectReplica {
     }
     if (request.method === 'GET' && url.pathname === '/api/events') return this.events(request, url)
     if (request.method === 'GET' && url.pathname === '/api/models')
-      return Response.json(this.store.metadata(3) ?? { providers: [], models: [] })
+      return Response.json(this.store.models())
     const history = /^\/api\/conversations\/(\d+)\/history$/.exec(url.pathname)
     if (request.method === 'GET' && history) {
       const id = Number(history[1]),

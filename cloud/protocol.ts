@@ -27,7 +27,7 @@
 // harmless.
 
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
-import type { ConversationSummary, SystemInfo } from '../shared/protocol.ts'
+import type { ConversationSummary, ModelsResponse, SystemInfo } from '../shared/protocol.ts'
 
 /** The current value of one conversation-scoped Pi document incarnation, or its retirement. */
 export interface ReplicaDoc {
@@ -76,7 +76,7 @@ export type MachineMessage =
   | { type: 'summaries'; value: ConversationSummary[]; removed: number[]; full: boolean }
   | { type: 'uiBuild'; value: string }
   | { type: 'system'; value: SystemInfo }
-  | { type: 'models'; value: unknown }
+  | { type: 'models'; value: ModelsResponse }
   | { type: 'delivered'; id: string; submissionId: number }
 
 export type CloudMessage =
