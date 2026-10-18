@@ -11,7 +11,9 @@ function count(category: string) {
   counts.set(category, (counts.get(category) ?? 0) + 1)
 }
 afterEach(() => {
-  if (process.env.SCHEDULE_STATS) console.log('schedule categories', Object.fromEntries(counts))
+  if (process.env.SCHEDULE_STATS) {
+    console.log('schedule categories', Object.fromEntries(counts))
+  }
   counts.clear()
 })
 function search(seed: number, numRuns = 150) {
@@ -43,9 +45,15 @@ function zone(hours: number) {
 function recordCalendar(time: number, hours: number) {
   count(`offset:${Math.sign(hours)}`)
   const date = new Date(time)
-  if (date.getUTCDate() === 1) count('calendar:month-start')
-  if (new Date(time + day).getUTCMonth() !== date.getUTCMonth()) count('calendar:month-end')
-  if (date.getUTCMonth() === 1 && date.getUTCDate() === 29) count('calendar:leap-day')
+  if (date.getUTCDate() === 1) {
+    count('calendar:month-start')
+  }
+  if (new Date(time + day).getUTCMonth() !== date.getUTCMonth()) {
+    count('calendar:month-end')
+  }
+  if (date.getUTCMonth() === 1 && date.getUTCDate() === 29) {
+    count('calendar:leap-day')
+  }
 }
 
 it('normalizes generated durations and advances intervals from now, not a missed fire', () => {
@@ -214,12 +222,24 @@ function cronField(
                     : `${lo}-${hi}/${step}`
       // Semantic values are carried into the oracle, never recovered by parsing cron text.
       const values = domain.filter((n) => {
-        if (syntax === 'wildcard') return true
-        if (syntax === 'singleton') return n === a
-        if (syntax === 'list') return n === lo || n === hi
-        if (syntax === 'range') return n >= lo && n <= hi
-        if (syntax === 'star-step') return (n - min) % step === 0
-        if (syntax === 'start-step') return n >= a && (n - a) % step === 0
+        if (syntax === 'wildcard') {
+          return true
+        }
+        if (syntax === 'singleton') {
+          return n === a
+        }
+        if (syntax === 'list') {
+          return n === lo || n === hi
+        }
+        if (syntax === 'range') {
+          return n >= lo && n <= hi
+        }
+        if (syntax === 'star-step') {
+          return (n - min) % step === 0
+        }
+        if (syntax === 'start-step') {
+          return n >= a && (n - a) % step === 0
+        }
         return n >= lo && n <= hi && (n - lo) % step === 0
       })
       return { text, values, wildcard: syntax === 'wildcard', syntax }
@@ -253,20 +273,28 @@ function calendarNext(c: CronCase, after: number) {
     const dom = c.date.wildcard || c.date.values.includes(date.getUTCDate())
     const dow = c.weekday.values.some((n) => n % 7 === date.getUTCDay())
     const matches = c.date.wildcard || c.weekday.wildcard ? dom && dow : dom || dow
-    if (!c.month.values.includes(date.getUTCMonth() + 1) || !matches) continue
-    for (const h of c.hour.values)
+    if (!c.month.values.includes(date.getUTCMonth() + 1) || !matches) {
+      continue
+    }
+    for (const h of c.hour.values) {
       for (const m of c.minute.values) {
         const candidate = localDay + (h * 60 + m) * minute - shift
-        if (candidate > after) return candidate
+        if (candidate > after) {
+          return candidate
+        }
       }
+    }
   }
   throw new Error('Generated calendar unexpectedly lacks a candidate within eight years')
 }
 function recordCron(c: CronCase) {
-  for (const key of ['minute', 'hour', 'date', 'month', 'weekday'] as const)
+  for (const key of ['minute', 'hour', 'date', 'month', 'weekday'] as const) {
     count(`${key}:${c[key].syntax}`)
+  }
   count(`day-rule:${c.date.wildcard}:${c.weekday.wildcard}`)
-  if (c.weekday.values.includes(7)) count('weekday:sunday7')
+  if (c.weekday.values.includes(7)) {
+    count('weekday:sunday7')
+  }
   recordCalendar(c.after, c.offset)
 }
 
