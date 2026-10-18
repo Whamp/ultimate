@@ -1,4 +1,5 @@
 import { defineExtension } from '@earendil-works/pi-durable'
+import { WebSocket } from 'undici'
 import type {
   CommitPublication,
   ConversationId,
@@ -25,13 +26,8 @@ export const MAX_RETAINED_BYTES = 16 * 1024 * 1024
 const ID_BYTES = 64
 export type SyncSocket = Pick<WebSocket, 'send' | 'close' | 'addEventListener'>
 export type Connect = (url: string, token: string) => SyncSocket
-// Node 26 accepts undici's options overload; DOM declarations only describe browser WebSockets.
-const NodeWebSocket = WebSocket as unknown as new (
-  url: string,
-  options: { headers: Record<string, string> },
-) => SyncSocket
 const connect: Connect = (url, token) =>
-  new NodeWebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
+  new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
 
 /** One outbound connection; injected transport keeps sync tests entirely in process. */
 export function startSync(

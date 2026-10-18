@@ -29,30 +29,6 @@ const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 type Directory = { state: 'loading' } | { state: 'failed' } | { state: 'loaded'; rows: Instance[] }
 
-/** The directory from `/api/directory`, behind Access, refreshed every 10 s. A failed refresh keeps the last list. */
-function useDirectory() {
-  const [directory, setDirectory] = useState<Directory>({ state: 'loading' })
-  const [failing, setFailing] = useState(false)
-  useEffect(() => {
-    async function refresh() {
-      try {
-        const response = await fetch('/api/directory')
-        if (!response.ok) throw new Error(`${response.status}`)
-        setDirectory({ state: 'loaded', rows: (await response.json()) as Instance[] })
-        setFailing(false)
-      } catch {
-        // Signed out or unreachable: say so, and keep what was loaded until the next refresh succeeds.
-        setFailing(true)
-        setDirectory((previous) => (previous.state === 'loaded' ? previous : { state: 'failed' }))
-      }
-    }
-    void refresh()
-    const timer = setInterval(() => void refresh(), 10000)
-    return () => clearInterval(timer)
-  }, [])
-  return { directory, failing }
-}
-
 /** Up and down move between rows, as in a list; Tab still walks them in order. */
 function moveFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -133,8 +109,27 @@ function Message({ children }: { children: ReactNode }) {
   )
 }
 
+/** The directory from `/api/directory`, behind Access, refreshed every 10 s. A failed refresh keeps the last list. */
 function Front() {
-  const { directory, failing } = useDirectory()
+  const [directory, setDirectory] = useState<Directory>({ state: 'loading' })
+  const [failing, setFailing] = useState(false)
+  useEffect(() => {
+    async function refresh() {
+      try {
+        const response = await fetch('/api/directory')
+        if (!response.ok) throw new Error(`${response.status}`)
+        setDirectory({ state: 'loaded', rows: (await response.json()) as Instance[] })
+        setFailing(false)
+      } catch {
+        // Signed out or unreachable: say so, and keep what was loaded until the next refresh succeeds.
+        setFailing(true)
+        setDirectory((previous) => (previous.state === 'loaded' ? previous : { state: 'failed' }))
+      }
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 10000)
+    return () => clearInterval(timer)
+  }, [])
   const now = Date.now()
   const machines = new Map<string, Instance[]>()
   if (directory.state === 'loaded')
