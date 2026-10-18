@@ -949,7 +949,11 @@ Available definitions:
                 : undefined
             if (args.action === 'start' && !existingAction && !definition)
               throw new Error(`Unknown agent: ${args.agent}`)
-            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
+            if (
+              definition?.tools?.some(
+                (name) => ![...parent.tools, ...parent.deferred].some((tool) => tool.name === name),
+              )
+            )
               throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
