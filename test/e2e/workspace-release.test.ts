@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import {
@@ -16,8 +16,10 @@ import type { ActionContext } from '../../server/actions.ts'
 import { actions } from '../../extensions/workspaces/server.ts'
 import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { git } from '../../extensions/workspaces/git.ts'
+import { landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
 import { until } from '../helpers.ts'
 import {
+  workspaceRepository as repository,
   workspaceFixture as fixture,
   nestedWorkspaceFixture as nestedFixture,
   commitWorkspaceFile as commit,
@@ -25,6 +27,35 @@ import {
 } from '../test-utils/workspace-fixture.ts'
 
 vi.setConfig({ maxConcurrency: 16 })
+
+it.concurrent('serializes concurrent lander checkout creation', async () => {
+  const { home, projectRoot } = await repository()
+  const path = await landerPath(home, projectRoot)
+  // Recover an unregistered directory left by an interrupted creation, too.
+  await mkdir(path)
+  await writeFile(join(path, 'incomplete'), 'interrupted')
+  const results = await Promise.allSettled([
+    landerCheckout(home, projectRoot),
+    landerCheckout(home, projectRoot),
+  ])
+  expect(results).toEqual([
+    { status: 'fulfilled', value: path },
+    { status: 'fulfilled', value: path },
+  ])
+  const entries = (await git(projectRoot, 'worktree', 'list', '--porcelain')).split('\n\n')
+  expect(entries.filter((entry) => entry.split('\n').includes(`worktree ${path}`))).toHaveLength(1)
+  expect(await readFile(join(path, 'base.txt'), 'utf8')).toBe('base')
+  expect(await readdir(path)).not.toContain('incomplete')
+  // An existing checkout must be left alone, even when another tip is requested.
+  await writeFile(join(path, 'keep.txt'), 'keep')
+  expect(await landerCheckout(home, projectRoot, 'missing-tip')).toBe(path)
+  expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('keep')
+})
+it.concurrent('retries lander checkout creation after a failure', async () => {
+  const { home, projectRoot } = await repository()
+  await expect(landerCheckout(home, projectRoot, 'missing-tip')).rejects.toThrow('missing-tip')
+  expect(await landerCheckout(home, projectRoot)).toBe(await landerPath(home, projectRoot))
+})
 
 it.concurrent.each(['running', 'queued'] as const)(
   'release retains a clean ancestor for a %s non-isolated descendant',

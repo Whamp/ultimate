@@ -9,8 +9,8 @@ import { PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
 import { replicaSocket } from './test-utils/replica-socket.ts'
 import { cloudModelsFixture } from './test-utils/cloud-models-fixture.ts'
-import { strictReplicaBinding } from './test-utils/replica-bindings.ts'
-import type { ReplicaStateFixture, ReplicaEnvFixture } from './test-utils/replica-bindings.ts'
+import { strictReplicaBinding } from './test-utils/strictReplicaBinding.ts'
+import type { ReplicaStateFixture, ReplicaEnvFixture } from './test-utils/strictReplicaBinding.ts'
 
 const databases: DatabaseSync[] = []
 afterEach(() => {

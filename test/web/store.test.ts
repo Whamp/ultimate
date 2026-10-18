@@ -72,6 +72,39 @@ afterEach(() => vi.useRealTimers())
 const tick = () => vi.advanceTimersByTimeAsync(10)
 
 describe('web replica store', () => {
+  const system: ServerEvents['system'] = {
+    build: {
+      id: 'test-build',
+      at: '',
+      generation: 1,
+      changed: [],
+      core: 'test-core',
+      extensions: {},
+      history: [],
+    },
+    machine: {
+      hostname: 'test-machine',
+      home: '/test/home',
+      platform: 'linux',
+      release: 'test-release',
+      arch: 'x64',
+      cpuModel: 'test-cpu',
+      cpuCount: 1,
+      totalMemory: 1024,
+      freeMemory: 512,
+      user: 'test-user',
+    },
+    process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
+    access: { origins: [] },
+    persistence: { kind: 'sqlite', path: '/test/state.sqlite', sizeBytes: 0, walBytes: 0 },
+    execution: { kind: 'node-local', defaultCwd: '/test/project' },
+    project: { root: '/test/project', name: 'test', config: false, decision: null, settings: {} },
+    code: { ultimateRoot: '/test/ultimate', branch: 'test', sha: 'test-sha', dirty: false },
+    extensionDiagnostics: [],
+    extensions: [],
+    skills: [],
+    contextFiles: [],
+  }
   it('applies ops to the snapshot and starts over from a fresh snapshot after a reconnect', () => {
     const { store, latest } = setup()
     const source = latest()
@@ -230,9 +263,6 @@ describe('web replica store', () => {
 
   it('shows the replica notice once per offline transition, not per SSE snapshot', async () => {
     const { store, latest } = setup()
-    const system = {
-      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
-    } as ServerEvents['system']
     const notice = {
       level: 'warning' as const,
       message: 'The machine is offline. This is the last synced state.',
@@ -259,9 +289,6 @@ describe('web replica store', () => {
 
   it('retains save, action and rejection errors around repeated offline snapshots', async () => {
     const { store, latest } = setup()
-    const system = {
-      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
-    } as ServerEvents['system']
     const offline = { ...system, offline: true }
     const replicaNotice = {
       level: 'warning' as const,
@@ -309,9 +336,6 @@ describe('web replica store', () => {
       )
     const source = latest()
     source.open()
-    const system = {
-      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
-    } as ServerEvents['system']
     const reconnect = async () => {
       source.drop()
       source.open()
@@ -342,9 +366,6 @@ describe('web replica store', () => {
     const { store, latest, fetch } = setup()
     const source = latest()
     source.open()
-    const system = {
-      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
-    } as ServerEvents['system']
     source.send('system', system)
     await vi.waitFor(() => expect(store.getState().models).toEqual({ providers: [], models: [] }))
     expect(fetch).toHaveBeenCalledOnce()

@@ -1,31 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai'
 import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, expect, it, vi } from 'vitest'
 import { listModels } from '../server/models.ts'
+import { modelRuntimeFixture } from './test-utils/modelRuntimeFixture.ts'
 
-const directories: string[] = []
-afterEach(async () => {
-  vi.restoreAllMocks()
-  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
-})
-
-async function modelRuntimeFixture() {
-  const directory = await mkdtemp(join(tmpdir(), 'ultimate-models-'))
-  directories.push(directory)
-  const modelsPath = join(directory, 'models.json')
-  const runtime = await ModelRuntime.create({
-    authPath: join(directory, 'auth.json'),
-    modelsPath,
-    modelsStorePath: join(directory, 'models-store.json'),
-    refreshOnCreate: false,
-  })
-  return { runtime, modelsPath }
-}
+afterEach(() => vi.restoreAllMocks())
 
 it('reloads custom models and API-key login metadata added after runtime creation', async () => {
   const { runtime, modelsPath } = await modelRuntimeFixture()
