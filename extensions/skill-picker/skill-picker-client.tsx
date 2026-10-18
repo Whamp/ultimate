@@ -121,12 +121,7 @@ export function skillReference(skill: SkillPickerSkill): string {
   return `[$${name}](<${path}>) `
 }
 
-/** New composers must not inherit the shown conversation's cwd; null explicitly requests project context. */
-export function skillPickerRequest(
-  target: 'conversation' | 'new',
-  conversationId?: number,
-  source?: number,
-) {
-  if (target === 'conversation') return { args: null, conversationId: conversationId ?? null }
-  return { args: source === undefined ? null : { source }, conversationId: null }
+/** The editor owns inventory scope; null explicitly avoids the last shown Agent conversation. */
+export function skillPickerRequest(conversationId: number | null | undefined) {
+  return { args: null, conversationId: conversationId ?? null }
 }

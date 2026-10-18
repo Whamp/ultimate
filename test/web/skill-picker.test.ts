@@ -186,12 +186,9 @@ describe('skill matching and insertion', () => {
 })
 
 describe('composer inventory context', () => {
-  it('uses existing conversation context but never the ambient conversation for a new root/branch', () => {
-    expect(skillPickerRequest('conversation', 17)).toEqual({ args: null, conversationId: 17 })
-    expect(skillPickerRequest('new', 17)).toEqual({ args: null, conversationId: null })
-    expect(skillPickerRequest('new', 17, 29)).toEqual({
-      args: { source: 29 },
-      conversationId: null,
-    })
+  it('uses the editor conversation and explicitly selects project inventory for Board or an absent editor', () => {
+    expect(skillPickerRequest(17)).toEqual({ args: null, conversationId: 17 })
+    expect(skillPickerRequest(null)).toEqual({ args: null, conversationId: null })
+    expect(skillPickerRequest(undefined)).toEqual({ args: null, conversationId: null })
   })
 })

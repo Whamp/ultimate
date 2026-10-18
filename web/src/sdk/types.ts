@@ -10,6 +10,7 @@ export type SlotName =
   | 'header.right'
   | 'statusline.left'
   | 'statusline.right'
+  | 'board.suggestions'
   | 'composer.attachments'
   | 'composer.toolbar'
   | 'composer.status'

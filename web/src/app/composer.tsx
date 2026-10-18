@@ -1,7 +1,7 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { KeyboardEvent, ReactNode } from 'react'
 import {
@@ -22,7 +22,7 @@ import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, composerSubmissions, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { ComposerContext } from '../sdk/composer.tsx'
-import type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from '../sdk/composer.tsx'
+import { useComposerTextarea } from '../sdk/composer-textarea.ts'
 import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 
 const alt = isMac ? '⌥' : 'Alt'
@@ -198,46 +198,6 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const { id, agent, busy, loading, inbox } = useConversation()
   const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
-  const textarea = useRef<HTMLTextAreaElement>(null)
-  const pendingSelection = useRef<number | null>(null)
-  const [selection, setSelection] = useState<ComposerSelection>({ start: 0, end: 0 })
-  const [focused, setFocused] = useState(false)
-  const [composing, setComposing] = useState(false)
-  const [autocomplete, setAutocomplete] = useState<ComposerAutocomplete>()
-  const registerAutocomplete = useMemo<ComposerEditor['registerAutocomplete']>(
-    () => (next) => {
-      setAutocomplete(next)
-      return () => setAutocomplete((current) => (current === next ? undefined : current))
-    },
-    [],
-  )
-  const [keyHandlers] = useState(
-    () => new Set<(event: KeyboardEvent<HTMLTextAreaElement>) => void>(),
-  )
-  const registerKeyHandler = useMemo<ComposerEditor['registerKeyHandler']>(
-    () => (handler) => {
-      keyHandlers.add(handler)
-      return () => {
-        keyHandlers.delete(handler)
-      }
-    },
-    [keyHandlers],
-  )
-  // Synchronize selection after controlled value changes; restore replacements only after React commits the text.
-  useLayoutEffect(() => {
-    const element = textarea.current
-    if (!element) return
-    const caret = pendingSelection.current
-    if (caret !== null) {
-      pendingSelection.current = null
-      element.focus()
-      element.setSelectionRange(caret, caret)
-    }
-    if (selection.start !== element.selectionStart || selection.end !== element.selectionEnd)
-      setSelection({ start: element.selectionStart, end: element.selectionEnd })
-  }, [text, selection])
-  const select = (element: HTMLTextAreaElement) =>
-    setSelection({ start: element.selectionStart, end: element.selectionEnd })
   const extensions = useExtensions()
   const transports = useMemo(() => composerSubmissions(extensions), [extensions])
   const submissions = useMemo(() => createComposerSubmissionStore(transports, id), [transports, id])
@@ -263,33 +223,11 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
-  const editor: ComposerEditor = {
+  const { editor, textarea, handleKeyDown } = useComposerTextarea({
     text,
-    selection,
-    focused,
-    composing,
-    readOnly: loading || sending,
-    registerKeyHandler,
-    registerAutocomplete,
-    replace: (range, inserted) => {
-      const current = draft.get()
-      if (
-        loading ||
-        current.sending ||
-        composing ||
-        !Number.isInteger(range.start) ||
-        !Number.isInteger(range.end) ||
-        range.start < 0 ||
-        range.end < range.start ||
-        range.end > current.text.length
-      )
-        return
-      const caret = range.start + inserted.length
-      pendingSelection.current = caret
-      update(current.text.slice(0, range.start) + inserted + current.text.slice(range.end))
-      setSelection({ start: caret, end: caret })
-    },
-  }
+    read: () => ({ text: draft.get().text, readOnly: loading || draft.get().sending }),
+    update,
+  })
   const blocked =
     pendingSubmissions > 1
       ? composerSubmissionConflict
@@ -326,11 +264,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     }
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.defaultPrevented || composing || event.nativeEvent.isComposing) return
-    for (const handler of keyHandlers) {
-      handler(event)
-      if (event.defaultPrevented) return
-    }
+    if (handleKeyDown(event)) return
     if (event.key !== 'Enter' || event.shiftKey) return
     // A touch keyboard's return key writes a new line; the send button sends.
     if (touchKeyboard()) return
@@ -339,7 +273,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
 
   return (
-    <ComposerContext value={{ draft: draftAccess(draft), editor }}>
+    <ComposerContext value={{ conversationId: id, draft: draftAccess(draft), editor }}>
       <div data-composer-target="conversation" className={cn(column(dock), 'pb-2')}>
         <Inbox items={inbox} />
         <PromptInput
@@ -355,30 +289,11 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
           />
           <PromptInputTextarea
-            ref={textarea}
+            {...textarea}
             autoFocus={!touchKeyboard()}
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
             id="composer-input"
-            aria-autocomplete={autocomplete ? 'list' : undefined}
-            aria-haspopup={autocomplete ? 'listbox' : undefined}
-            aria-controls={autocomplete?.listId}
-            aria-activedescendant={autocomplete?.activeOptionId}
-            onChange={(event) => {
-              update(event.currentTarget.value)
-              select(event.currentTarget)
-            }}
-            onSelect={(event) => select(event.currentTarget)}
-            onFocus={(event) => {
-              setFocused(true)
-              select(event.currentTarget)
-            }}
-            onBlur={() => setFocused(false)}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={(event) => {
-              setComposing(false)
-              select(event.currentTarget)
-            }}
             onKeyDown={onKeyDown}
             placeholder={
               busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
