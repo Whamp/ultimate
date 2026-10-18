@@ -35,13 +35,17 @@ export interface ReplicaEnvFixture {
   }
 }
 
+function hasReplicaBindingKey<T extends object>(target: T, key: PropertyKey): key is keyof T {
+  return key in target
+}
+
 /** Missing platform members must fail at use, rather than silently succeeding with undefined. */
 export function strictReplicaBinding<T extends object>(binding: T): T {
   return new Proxy(binding, {
-    get(target, key, receiver) {
-      if (!Reflect.has(target, key))
+    get(target, key) {
+      if (!hasReplicaBindingKey(target, key))
         throw new Error(`Unexpected replica binding member: ${String(key)}`)
-      return Reflect.get(target, key, receiver)
+      return target[key]
     },
   })
 }
