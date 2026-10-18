@@ -1,4 +1,4 @@
-import { ActionError, actionMessage, createApi } from './api.ts'
+import { ActionError, actionMessage, createApi, MachineOfflineError } from './api.ts'
 import { createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createUiState } from './ui-state.ts'
@@ -64,6 +64,10 @@ store.subscribe(() => {
   localStorage.setItem('ultimate.theme', ui.theme)
   document.documentElement.classList.toggle('dark', ui.theme === 'dark')
 })
+/** The next selection replaces the current history entry rather than pushing one, as a redirect does. */
+export function replaceNextSelection() {
+  replaceSelection = true
+}
 // The stream follows `shell.conversation`, whichever tab or action set it.
 function followSelection() {
   if (!initialized) return
@@ -93,6 +97,11 @@ addEventListener('popstate', () => {
 addEventListener('pagehide', () => uiState.flush())
 // An action failure no caller handled: show it rather than lose it in the console.
 addEventListener('unhandledrejection', (event) => {
+  if (event.reason instanceof MachineOfflineError) {
+    event.preventDefault()
+    store.notify({ level: 'warning', message: event.reason.message })
+    return
+  }
   if (!(event.reason instanceof ActionError)) return
   event.preventDefault()
   store.notify({ level: 'error', message: actionMessage(event.reason) })

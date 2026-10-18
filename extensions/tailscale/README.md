@@ -11,7 +11,7 @@ Exposure is on unless `~/.ultimate/settings.json` turns it off; only that file c
 }
 ```
 
-Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` → `User.LoginName` in `tailscale status --json`). Project settings can turn exposure off but cannot turn on what your settings disable or change the allowlist; a project enable over your disable produces a notice and stays disabled. Faux servers never expose. Without Tailscale installed the panel shows how to install it, without a notice. Install Tailscale, log in, enable HTTPS certificates in the admin console, and grant operator rights if needed with `sudo tailscale set --operator=$USER`.
+Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` → `User.LoginName` in `tailscale status --json`). Project settings can turn exposure off but cannot turn on what your settings disable or change the allowlist; a project enable over your disable produces a notice and stays disabled. Faux servers never expose, except a faux preview started by another Ultimate's `instance` tool: it publishes like any preview (below), so the user can open it from their phone, and frees its port when it stops. Its faux model's tools only edit a scratch file in its temporary home. Without Tailscale installed the panel shows how to install it, without a notice. Install Tailscale, log in, enable HTTPS certificates in the admin console, and grant operator rights if needed with `sudo tailscale set --operator=$USER`.
 
 ## UI
 
@@ -19,14 +19,16 @@ The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read wh
 
 - **ready:** the URL with copy and open buttons, who may open it (`allow`), and that it is tailnet-only.
 - **Problems** (`not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`): a short title and the hint; a command in the hint, such as `sudo tailscale set --operator=$USER`, becomes a chip that copies it. After a fix, **Check again** starts again in place; a settings change or a restart does too.
-- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when your settings disable it and a project enables it, and on faux servers. **Check again** rereads the user settings.
+- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when your settings disable it and a project enables it, and on faux servers other than previews. **Check again** rereads the user settings.
 - **starting:** a quiet spinner.
 
 While ready, the title bar shows `● tailnet`; hover for the URL, click to open the panel.
 
+Other extensions read the status through the `tailscale` service, `host.use<TailscaleService>('tailscale')?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
+
 ## Stable ports, handoff, and recovery
 
-`~/.ultimate/tailscale.json` stores `{ "ports": { "<absolute project root>": { "port": 4747, "owner": "<pid>:<random token>" } } }`. A new project prefers its local supervisor port if free, otherwise the next free port from 4747. Port 443, existing Serve mappings, and other registry assignments are excluded. Registry entries remain after shutdown; prune unused entries by hand when their project is not running.
+`~/.ultimate/tailscale.json` stores `{ "ports": { "<absolute project root>": { "port": 4747, "owner": "<pid>:<random token>" } } }`. A new project prefers its local supervisor port if free, otherwise the next free port from 4747. Port 443, existing Serve mappings, and other registry assignments are excluded. Registry entries remain after shutdown; prune unused entries by hand when their project is not running. A preview started by another Ultimate's `instance` tool (`ULTIMATE_INSTANCE_OWNER` set) claims its port under its own temporary home instead, marked `"temporary": true`, so it never takes the address of the server that previews the same folder; its entry goes when it closes, or at the next start once its owner is dead.
 
 Assignments are written atomically under a pid-owned SQLite lock (automatically released on process death). Waiters allow two minutes for CLI work; a busy-registry hint asks you to wait and retry. Stale sidecar owners are recovered without manual lock deletion. Each generation claims a fresh owner token when it creates or adopts a mapping. Closing a generation removes the mapping only if its token still owns the assignment and Serve still targets that generation's local supervisor URL. Thus a delayed old shutdown cannot remove a successor's mapping or a foreign replacement.
 
@@ -36,7 +38,7 @@ On start, registered mappings to loopback targets are removed only if the owner'
 
 Serve replaces identity headers itself, so spoofed `Tailscale-User-Login` values never reach Ultimate through Serve. Identity headers are absent for Funnel and tagged devices, which are denied. Shared-device users have their own logins and are excluded unless explicitly allowed.
 
-Requests with forwarding headers are never treated as local, even if a client supplies a loopback Host or Origin. They must match the registered HTTPS authority and any Origin must equal that origin, then pass login verification. A present `Sec-Fetch-Site` must be `same-origin` or `none`, blocking cross-site browser scripts and requests. Non-browser clients without fetch metadata still require the allowed identity. Admission rechecks registration after async verification, so in-flight requests cannot outlive revocation. These rules cover assets, API, SSE, actions, and HMR. The listener remains loopback-only; exposure and allowlist configuration are user-level machine-owner decisions.
+Requests with forwarding headers are never treated as local, even if a client supplies a loopback Host or Origin. They must match the registered HTTPS authority and any Origin must equal that origin, then pass login verification. A present `Sec-Fetch-Site` must be `same-origin` or `none`, except that `same-site` and `cross-site` may open only the UI root `/` (query permitted) with method `GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, and no `Upgrade` header. This exception passes only the fetch-metadata check: the registered host, exact Origin when present, allowed login, and revocation check still apply. Unknown site values remain denied; cross-site or same-site API, SSE, actions, assets, embedded documents, and HMR upgrades remain blocked. Non-browser clients without fetch metadata still require the allowed identity. Admission rechecks registration after async verification, so in-flight requests cannot outlive revocation. These rules cover assets, API, SSE, actions, and HMR. The listener remains loopback-only; exposure and allowlist configuration are user-level machine-owner decisions.
 
 ## Status action
 

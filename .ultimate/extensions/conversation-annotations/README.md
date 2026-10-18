@@ -41,7 +41,7 @@ The composer freezes the entire batch synchronously before its first await, incl
 - `annotation-cards.tsx`: editable composer cards and this extension's submitted-input cards.
 - `web.tsx`: project-local contributions.
 
-Source-owning conversation and delivery target are separate. Plan attributes are canonical `data-annotation-conversation/document/record/field/title/content` supplied by the built-in plan renderer; `content` is the raw field. Individual note fields use `notes:<timestamp>:<index>`. The extension depends on the generic SDK `composer.attachments` slot and `ComposerSubmissionContribution`, not on BB APIs or a duplicate SDK.
+Source-owning conversation and delivery target are separate. Plan attributes are canonical `data-annotation-conversation/document/record/field/title/content` supplied by the built-in plan renderer; `content` is the raw field. Individual note fields use `notes:<timestamp>:<index>`. The extension depends on the generic SDK `composer.attachments` slot and `composerSubmission: ComposerSubmissionContribution`, not on BB APIs or a duplicate SDK.
 
 ## Verification
 

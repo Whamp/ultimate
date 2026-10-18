@@ -128,9 +128,16 @@ export function Transcript({ dock }: { dock?: boolean }) {
   useLayoutEffect(() => {
     const scroll = stick.current?.scrollRef.current
     const content = stick.current?.contentRef.current
-    if (!scroll || !content) return
+    if (!scroll || !content) return undefined
     scroll.scrollTop = scroll.scrollHeight
     if (id !== undefined) reveal(scroll, content)
+    // The library observes content growth, not viewport shrinkage as the composer grows.
+    // Reuse its follow lock so resizing never pulls someone away from older messages.
+    const resize = new ResizeObserver(() => {
+      void stick.current?.scrollToBottom({ animation: 'instant', preserveScrollPosition: true })
+    })
+    resize.observe(scroll)
+    return () => resize.disconnect()
   }, [id])
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
@@ -443,9 +450,6 @@ function EmptyState() {
             </Fragment>
           ))}
         </div>
-        <div className="mt-4 border-t border-border/70 pt-4 font-sans text-[13px] text-muted-foreground">
-          New here? Ask <span className="text-foreground/85">How does Ultimate work?</span>
-        </div>
       </div>
     </ConversationEmptyState>
   )
@@ -671,6 +675,8 @@ function AssistantView({
   busy: boolean
   streaming?: boolean
 }) {
+  const extensions = useExtensions()
+  const labels = messageItems(extensions, 'answerLabels')
   const last = message.content.length - 1
   const final =
     !streaming &&
@@ -690,8 +696,16 @@ function AssistantView({
       from="assistant"
     >
       {final && (
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-success">
-          <CheckIcon aria-hidden="true" className="size-3.5" /> Final answer
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-success">
+          <span className="inline-flex items-center gap-1.5">
+            <CheckIcon aria-hidden="true" className="size-3.5" /> Final answer
+          </span>
+          {entry &&
+            labels.map(({ key, extension, version, component: Label }) => (
+              <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
+                <Label entry={entry} />
+              </ExtensionBoundary>
+            ))}
         </div>
       )}
       {message.content.map((block, index) => {

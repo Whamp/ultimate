@@ -39,7 +39,7 @@ async function acceptBatch(conversationId: number, input: AnnotationBatchInput) 
 }
 
 /** Composer transport replaces plain submit only when this conversation has pending annotation cards. */
-export const annotationComposer = {
+export const annotationComposerSubmission = {
   subscribe(listener: () => void) {
     listeners.add(listener)
     return () => {

@@ -1,12 +1,11 @@
 # Workspaces
 
-An isolated conversation gets its own Git checkout. New is isolated unless the start page's Isolated switch is off
-(remembered in `ext.conversations.creationType`); New isolated conversation always is. Subagents can select
-`isolate: "worktree"` for the same setup. Uncommitted source changes are not included.
+An isolated conversation gets its own Git checkout. Coordinator branches started by @ultimate are isolated by
+default. Subagents can select `isolate: "worktree"` for the same setup. Uncommitted source changes are not included.
 
 Isolation needs a Git repository with a checked-out branch and a first commit. Until a project has them, `isolation`
-returns `{ reason }`, the Isolated switch is off and disabled with that reason, New starts shared conversations,
-an explicit isolated start fails with the reason, and the project has no lander. `isolation` also reports whether the
+returns `{ reason }`, an isolated start fails with that reason, and the project has no lander.
+@ultimate handles Git setup through onboarding before starting isolated work. `isolation` also reports whether the
 folder is `empty`; once the project can be isolated, it stands the lander if there is none, so a first commit brings it
 without a restart. `setupGit` makes an empty folder isolatable (`git init` where needed, then an empty first commit) and
 refuses a folder with files, whose first commit is a judgement for an agent; onboarding's Git card offers both.
@@ -15,25 +14,57 @@ Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
-The first model request waits for preparation; failed or removed workspaces block tools with the reason.
+The first model request waits for preparation. Before every tool call, the workspace must be ready with a
+present, registered checkout. Otherwise the tool is blocked with the reason; the model can still reply and
+explain why it cannot use the checkout.
+A removed workspace is recreated at the same path on the next model request. An existing branch with unlanded
+commits is checked out unchanged, with its tip as the new base; a merged or missing branch starts at the current
+target tip. Nested isolates prepare their source ancestor checkouts first.
+The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
+on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
 
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
-read-only: landing goes through agents, and removing a checkout only happens when someone asks an agent to clean up.
+read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
-`discard {id}` removes a clean checkout and keeps its branch and history; it is the cleanup path for top-level
-checkouts (the `subagent` tool's `discard` covers worktree children).
+`pending {ids}` reports `{id, uncommitted, unlanded}` for checkouts with work at risk, including transitively
+owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
+only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or
+`busy` reasons (running or queued input). Descendants release before ancestors; a kept descendant also keeps its
+ancestors, reported with `descendant: <id>`. The removal transaction also checks current records sourced transitively
+from the checkout, so a descendant resumed during the batch keeps its source ancestors. Nested recreation checks
+its source parent's `ready` state and folder in the transaction that starts preparation; otherwise it readies the
+parent and retries. Source queues are acquired ancestor-first for that decision and filesystem recovery.
+Git writes are serialized per source and removal is never forced.
+Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
+on that same source queue before checking the record and recreating. Reconciliation and recreation finish
+interrupted removals; newly found pending work is kept and the checkout returns to `ready`. Unlanded counts include
+commits reachable from either the branch or HEAD, including detached work. Refused removals report `reason` and
+restore `ready` only if the folder remains a registered worktree. If removal succeeded before branch cleanup
+failed, the record stays `removed` with the error so the next input can recreate it. Recovery through `ready()`
+returns the kept record and retains the reason in workspace info.
+On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
+`release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
+for the current checkout to finish, not the remaining batch.
+`discard {id}` explicitly removes a clean checkout and keeps its branch until reuse (the `subagent` tool's
+`discard` covers worktree children). All removed checkouts follow the same recreation rule above, preserving
+unlanded branch history, including after explicit discard.
 `stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
 changes; `disk` measures the worktrees directory with `du`, and on btrfs also the real size with shared blocks counted
 once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and its result is reused for a minute.
 
 ## Lander
 
-`workspace submit` queues a top-level main's clean tip in the root document's `queue`
-and returns its position and lander conversation at once; the main keeps working. One `workspaces.lander` task per
+When the board is enabled, each submission and its landing result appear there as an exchange with `@lander`.
+
+`workspace submit` requires a non-empty `divergence` string: how the delivered result differs from the original
+request (new agreements, different approach or library, changed scope), or "None" when it matches. It queues a
+top-level main's clean tip in the root document's `queue` and returns its position and lander conversation at once;
+the main keeps working. The submission saves `divergence` and `at`, the submitter's latest visible entry at submit
+time, as a breadcrumb; synchronous `workspace land` is unchanged. One `workspaces.lander` task per
 source checkout (`landers`) processes that source's entries in order; merging, checks, fast-forward and push are
 code, and a model runs only on a failure or when someone writes to the lander.
 
@@ -59,7 +90,13 @@ rows and ends in a quiet "full log in #<lander>" link. The lander's report messa
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
 conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
 With lineage enabled, the report phase also leaves a replay-safe landing note in the submitter's tree root, unless
-the submitter is that root or has none. Failed submissions leave no root note; notes never wake the root.
+the submitter is that root or has none. Its data includes `divergence` and `at` alongside `from`, `sha`, `target`,
+`commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None". The
+submit-time summary stays in the data and on the card but not in the model text: it is often stale, and the tally's
+abstract of the submitter tells its story. In a tally, the note freezes that abstract: it carries it as `abstract`
+with a `State at landing` block in its text, and the card shows it collapsed (see the lineage README).
+The shared landing card in the root and submitter shows a quiet Diverged line and the breadcrumb.
+Failed submissions leave no root note; notes never wake the root.
 
 What lands is named once, at submit: the queue entry keeps the submitter's `subject` (title, summary and feature)
 from the `conversations` service's `subject(id)`, so a later retitle does not rename it. The result, the lander log's
@@ -78,6 +115,8 @@ lander's sidebar row shows the feature it lands or landed last.
    reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
    group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
    output line (ANSI stripped, at most 200 characters) as `summary`, shown muted after the command on its step row.
+   A failed run's log entry keeps its output tail as `output` (not in `steps`), under a collapsed "Output" in the
+   lander's log, so a check that then passed as flaky can still be diagnosed.
 4. Fast-forwards the target branch in the source checkout (`merge --ff-only` when it is checked out). If the target
    moved meanwhile it starts again, at most three attempts.
 5. With `lander.push`, pushes the target branch (never forced); a rejection integrates again once, then is reported.
@@ -85,8 +124,19 @@ lander's sidebar row shows the feature it lands or landed last.
    whether it pushed, "Needs restart." for `server/` or `shared/` changes to the running clone, and the lander
    conversation id for the full log (changed paths and output tails live there).
 
+7. With `lander.deploy`, if any landed changed path starts with a configured prefix, sends one one-way board
+   message from the lander to the named standing agent. It asks the agent to deploy the landed SHA and report to
+   the submitter, with the commit subjects, matching paths and push status. This is a handoff, not a deployment:
+   the lander does not wait. `deploy → @<agent>` appears in the submit card's steps, full log and report.
+   Board admission and a sender-scoped receipt (`lander-deploy:<submission>`) commit atomically, so replaying
+   after a crash cannot send twice, even when a new lander task resumes the report. An unknown or non-resident
+   agent records a warning step and notice; the landing stays landed. Invalid deploy settings give a notice and
+   disable only the hook. No setting or no matching paths means no deploy step.
+
 Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e"]], "push": "origin" }`;
-both are optional.
+both are optional. Optional `"deploy": { "agent": "cloudflare", "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"] }`
+inside `lander` enables the deploy handoff. `paths` is a non-empty list of non-empty path prefixes (not globs),
+and `agent` must name a resident agent. The board must be enabled.
 
 ### The lander's model
 
@@ -127,4 +177,5 @@ of the current code's own task waits for the next submit or open, so a determini
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-Conclude and clear context never remove a checkout. Landing never restarts Ultimate.
+Conclude releases only idle checkouts with no uncommitted or unlanded work; clear context never removes one.
+Landing never removes a checkout or restarts Ultimate.

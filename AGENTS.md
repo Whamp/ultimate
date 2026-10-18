@@ -8,19 +8,27 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, each tree like a history of commits.
 
-- **Roots** each hold one line of work's idea, principles and standing decisions, and keep its tally: every landing
-  from a root's tree leaves a note in it. Start a root deliberately (New → New root) or adopt a conversation with
-  ⌘K "Make this a root". A fresh project's first conversation is its first root.
-- **A branch** is a feature, a fix, an experiment. It is forked deliberately from a conversation in a tree at a point,
-  starts from a brief aimed at its intent, and then works as if it were the only conversation.
-  New branches from the root of the tree you are in. A branch is never a subagent.
+- **Roots** keep read-only tallies: prompts, each conversation's latest abstract, and landings with divergence and
+  `#conversation/entry` breadcrumbs. A tally is the context every branch starts from; it runs no turns.
+  A new project starts by talking to @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here.
+  It handles setup cards, reads the project and seeds the root's first tally; the optional focus is your instructions.
+  @ultimate maintains standing decisions with `note`, seeds empty roots with `seed_tally`, and reshapes tallies with
+  `compact_tally` without deleting history. When the user asks for an independent line of work, it creates a root
+  with `new_root` and seeds it from its own reading. The read-only footer shows estimated context tokens and a
+  **Talk to @ultimate** link.
+- **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
+  coordinator branch that inherits that context before its prompt. A branch is never a subagent.
+- **Talk to @ultimate on the Board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
+  The sidebar's **Talk to @ultimate** button opens it; conversations and roots are not created by hand.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
 - **Talk across the tree without waking anyone.** `note` leaves context in another conversation for its next turn;
-  `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
-  catch-up of what landed, overlaps first.
+  `notify` tells you when another conversation finishes. Resuming a branch brings a catch-up of its tree's tally
+  (older updates collapse when needed), then new target commits, overlaps first.
+- **State divergence.** Reports and `workspace submit` say how the result differs from the task as given: new
+  agreements, a different approach or changed scope. Say "None" when it matches.
 - **Conclude** a conversation when its work is done; it stays readable and can be resumed.
 - **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
   a card), keep a faux preview of the branch's checkout running (`instance start` with `faux: true`), give the user
@@ -61,14 +69,17 @@ others load; see [Events](extensions/README.md#events).
 ## Discovery and settings
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
-Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
-`<project>/.ultimate/skills/`, with later names winning.
-Every built-in is on by default, including `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+Skills load from clone `skills/`, then the project's `.pi/skills/`, then `~/.ultimate/skills/`, then
+`<project>/.ultimate/skills/`, with later names winning. Personal instructions load from `~/.ultimate/AGENTS.md`
+(or `CLAUDE.md`) ahead of the project's. Pi's own `~/.pi/agent/skills/` and `~/.pi/agent/AGENTS.md` are not read: they
+belong to Pi, so link a skill into `~/.ultimate/skills/` to use it here.
+Every built-in is on by default, including `board` (durable agent messages and the user's inbox), `questions` (answer cards for @ultimate's questions to the user), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `cloud` (replica sync; inert until configured in user settings and Secrets), `cloudflare` (deferred Workers Observability tool; inert without a call and its secret), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers except previews, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
 picks the model for automatic titles, summaries and reply assessments; set it in either file or with
-the "Summary model…" command, and it applies to the next request.
+the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai/<id>", …]`; project over
+user) runs those models on the priority tier through the `fast` extension, at a higher usage rate.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds only its isolate setup
 and lander checks.
 
@@ -81,7 +92,7 @@ project's `.ultimate/` stay unloaded until that project is local; tests seed the
 
 ## Inspecting yourself
 
-Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its read-only `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. Use ordinary tools for writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
+Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
 
 ## Durability
 
@@ -101,7 +112,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - `pnpm install`, then `pnpm start` runs the supervisor on Node 26. It owns the public TCP port and single-instance lock, prints the URL and opens it as a Chrome app window (`http://ultimate.localhost:<port>`, a tab without a Chrome-family browser); `--no-open` or `ULTIMATE_NO_OPEN=1` disables opening.
 - Run `pnpm link --global` once in the clone, then `cd ~/Projects/app && ultimate`. `ultimate [dir] [--port N] [--no-open]` starts in that project, or opens a window of it when it already runs; `pnpm start` in the clone uses the clone as the project.
 - Project config belongs in `<project>/.ultimate/`: extensions, agents, skills, and optional `settings.json` (JSON object; `defaultSurface` selects the preferred surface). Discovery is built-in, user `~/.ultimate/`, then project config; later names win. User config is independent of `ULTIMATE_HOME`.
-- Server facets can export `actions`, a map of async `(args, ctx)` functions called by `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }`, returning `{ result }`. `ctx` has `host`, optional `conversationId`, `signal`, and `exec(command, args, { cwd?, timeout? })`; exec uses the project cwd, no shell, a 1 MiB output cap and a maximum 30 second timeout.
+- Server facets can export `actions`, a map of async `(args, ctx)` functions callable from codemode with `ultimate.action(extension, action, args?)` or from the UI by `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }`, returning `{ result }`. `ctx` has `host`, optional `conversationId`, `signal`, and `exec(command, args, { cwd?, timeout? })`; exec uses the project cwd, no shell, a 1 MiB output cap and a maximum 30 second timeout.
 - `pnpm dev` runs the core standalone; the `restart` tool requires `pnpm start`.
 - Call `restart` after editing `server/` or `shared/`, never for `web/`, `extensions/`, or `agents/`. `POST /api/restart` accepts the same swap; reconnect to events to observe the new generation. The supervisor type-checks and prepares a new child without storage, then waits for the old harness to close before opening the new one and resuming work. Failed checks/preparation keep the old child serving.
 - A crashed child restarts with backoff. After three failed boots the supervisor serves diagnostics and retries on changes in `server/`, `shared/`, or `extensions/`.
@@ -109,7 +120,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. Never run two storage owners on the same home.
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
-- Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`; the `models` extension logs in to providers.
+- Pi's models, settings, and auth are shared with `~/.pi/agent`; the `models` extension logs in to providers.
 - `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process faux tests with temporary homes (target under 10 s); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances; `pnpm eval` runs the real-model agent evals in `evals/` and ends with their cost. There are no browser tests: UI is verified on a faux instance with screenshot or browser.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
@@ -124,7 +135,7 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-A top-level conversation created with New isolated conversation works in its own worktree.
+Coordinator branches started by @ultimate are isolated in their own worktrees by default.
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
@@ -208,6 +219,8 @@ cases, not inflate coverage or merely restate the implementation.
 
 ## Subagents
 
+Definitions with `resident: true` have one standing conversation per project, reached by the subagents service and pinned with the lander; deferred tools explicitly named in a definition are offered only to conversations configured from it.
+
 Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer or yield on queued steering while it continues running. All new children survive the parent's stop; use explicit child stop. Undelivered answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. Children cannot delegate by default. Only definitions explicitly listing `subagent` in `tools` retain the tool and
 extension, subject to the parent's tool subset; they follow their assigned role, not the generic coordinator flow.
 
@@ -219,10 +232,10 @@ definition in parallel and returns one merged verdict. Add a reviewer by adding 
 ## Borrowed from Pi
 
 - `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. undici in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.
-- `pnpm-workspace.yaml` — registers patches/@earendil-works__pi-durable@1.2.0.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR, adding transactional input-placement hooks, marking entries placed from input submissions (input: true) so extensions can distinguish requests from user-role writes, and recording the requested thinkingLevel on each response as pi-agent-core does, and patches/@earendil-works__pi-claude-code@0.1.0.patch, rebuilding replay cache markers to stay within Claude's four-block limit. Drop each patch when upstream ships the corresponding fix; pnpm errors when a versioned patch no longer matches.
+- `pnpm-workspace.yaml` — registers patches/@earendil-works__chord@1.3.0.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR, patches/@earendil-works__pi-durable@1.3.0.patch, adding transactional input-placement hooks, marking entries placed from input submissions (input: true) so extensions can distinguish requests from user-role writes, and recording the requested thinkingLevel on each response as pi-agent-core does, and patches/@earendil-works__pi-claude-code@0.1.0.patch, rebuilding replay cache markers to stay within Claude's four-block limit. Drop each patch when upstream ships the corresponding fix; pnpm errors when a versioned patch no longer matches.
 - `test/claude-code-cache.test.ts` — internal imports exercise the pi-claude-code replay cache patch registered in pnpm-workspace.yaml. Drop this coupling and the patch when upstream rebuilds cache breakpoints within Claude's four-block limit.
+- `extensions/lineage/server.ts` — inlines Pi's unexported createCompaction so tally checks and manual compaction creation share one transaction. Drop when Pi exposes atomic compaction admission.
 - `extensions/lineage/catchup.ts` — uses the patched transactional beforeInput hook to place catch-up notes before inputs. Drop the patch when Pi ships input-placement hooks.
-- `test/ansi-output.test.ts` — internal import exercises the installed sanitizer patch. Drop when Pi exports the sanitizer and OutputBuffer or ships equivalent sanitizer tests.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
 - `web/src/app/model.ts` — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.
@@ -230,6 +243,7 @@ definition in parallel and returns one merged verdict. Add a reviewer by adding 
 - `web/src/sdk/events.ts` — adapted Pi event bus using browser-safe sets instead of node:events, with Pi's exported EventBus type and handler-error semantics. Drop when Pi ships a browser-safe bus.
 - `extensions/coding-tools/web.tsx` — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
+- `extensions/fast/server.ts` — sets service_tier through onPayload because pi-ai's simple stream options drop serviceTier. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.

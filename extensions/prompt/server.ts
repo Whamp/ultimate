@@ -1,8 +1,5 @@
-import {
-  formatSkillsForPrompt,
-  getAgentDir,
-  loadProjectContextFiles,
-} from '@earendil-works/pi-coding-agent'
+import { join } from 'node:path'
+import { formatSkillsForPrompt, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
@@ -19,7 +16,8 @@ export default function prompt(host: ExtensionHost) {
       ),
       section(
         'principles',
-        () => `- Understand before you change: read the relevant code, run it, look at it. Ground every claim in files, command output, tests, or screenshots.
+        () => `- Read what kind of request it is. A question, or "how could we…", asks you to explore: investigate, then come back with one proposal that includes what the person may not have thought of (a risk, a simpler path, a case it also touches), and wait for their go before changing anything. A clear instruction ("do this", "fix that"), a delegated task or a scheduled run is the go: do it, verify, and report, asking only about decisions that change behaviour or scope. When you need a decision from the person, end with the questions and numbered options.
+- Understand before you change: read the relevant code, run it, look at it. Ground every claim in files, command output, tests, or screenshots.
 - Keep it simple: question the need, reuse what exists, prefer platform features and installed dependencies, and write the least code that solves the actual problem. No speculative abstractions, compatibility shims, or fallbacks for situations that do not exist.
 - Fail fast, iterate quickly, verify by trying: make a small change, run it, check the result in tests, the running app, or a screenshot, then take the next step.
 - Never claim success you have not verified. When a check fails, say so and show the output. When you skipped something, say that.
@@ -52,25 +50,29 @@ export default function prompt(host: ExtensionHost) {
             : []),
         ].join('\n')
       }),
-      // Pi upstream: @earendil-works/pi-coding-agent@1.2.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
+      // Pi upstream: @earendil-works/pi-coding-agent@1.3.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
       section('tools', (input) => {
         const guidance: Record<string, string> = {
-          read: '- read: inspect files; use it instead of cat or sed, with offset/limit for large files.',
-          bash: '- bash: run commands, tests, and searches (rg, find, ls, git). Long output is truncated; the full output is saved to a file you can read.',
-          edit: '- edit: precise replacements. Each edits[].oldText must match the file exactly and be unique; keep it small. Put several changes to one file into one call; edits are matched against the original file, so never overlap them.',
-          write: '- write: new files or complete rewrites only.',
+          read: '- read: inspect files, with offset/limit for large files.',
+          bash: '- bash: run commands, tests, builds, git, and searches (rg, find, ls). Long output is truncated; the full output is saved to a file you can read.',
+          edit: '- edit: change existing files with precise replacements. Each edits[].oldText must match the file exactly and be unique; keep it small. Put several changes to one file into one call; edits are matched against the original file, so never overlap them.',
+          write: '- write: create new files or rewrite one completely.',
         }
+        const names = new Set((input.agent.tools ?? []).map((tool) => tool.name))
         return [
-          ...(input.agent.tools ?? []).flatMap((tool) =>
-            guidance[tool.name] ? [guidance[tool.name]] : [],
-          ),
+          ...[...names].flatMap((name) => (guidance[name] ? [guidance[name]] : [])),
+          ...(names.has('bash') && names.has('read') && names.has('edit') && names.has('write')
+            ? [
+                '- IMPORTANT: never use bash to read or change files when a dedicated tool does it. Read with read, not cat, head, tail or sed -n. Change files with edit, not sed -i, perl, awk or a python or node script. Create files with write, not a heredoc, echo or printf redirect. The person reviews your work through these tools: edit and write show each change as a diff, a script in bash hides it, and edit refuses text that does not match exactly once where a script silently changes nothing. A rename across a few files is one edit call per file. Only output a program generates (formatters, codegen, package managers) or a mechanical change across many files goes through bash.',
+              ]
+            : []),
           '- You talk to the person through a web UI that renders Markdown: short paragraphs, lists, fenced code with a language, and file paths in backticks.',
         ].join('\n')
       }),
       section('project_context', (input) =>
         loadProjectContextFiles({
           cwd: input.env?.cwd ?? input.agent.cwd ?? host.projectRoot,
-          agentDir: getAgentDir(),
+          agentDir: join(host.userHome, '.ultimate'),
         })
           .map(
             (file) =>

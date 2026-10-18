@@ -1,5 +1,11 @@
 # Ultimate
 
+> [!NOTE]
+> **A personal project, shared as inspiration.** Ultimate is not a library or a product with users to support. Copy
+> what you like, fork it, do whatever you want with it. I don't review issues or pull requests, and I change things as
+> I go, fundamental ones included, without migration paths or regard for anyone building on top. Whether that works
+> for you is your call. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 A coding agent you specialize for the project you work on. Start it in your repository and it is Pi's coding agent in a
 web UI. Then build what this project needs into it, such as custom tools, panels, subagents, skills, or whole screens,
 and keep them in the project's `.ultimate/` folder. Everyone who works on the project boots the same specialized agent,
@@ -23,9 +29,10 @@ place.
 - **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
-- **A forest of conversation trees.** Each root holds one line of work's idea and keeps a tally of what landed;
-  branch a feature or fix from any conversation at any point, and it starts from a brief aimed at its intent.
-  Conversations run for a long time: compaction keeps them going, so they accumulate what they learn.
+- **A forest of conversation trees.** Each root keeps a non-agent tally: prompts, latest conversation abstracts,
+  and landings with divergence and links back to their source. Talk to @ultimate on the Board: it starts coordinator
+  branches that inherit a root's tally before their prompt. Resuming a branch catches it up on what its tree learned.
+  Roots are read-only; @ultimate keeps their tallies accurate and compacts them without deleting history.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
   The point is an agent shaped for the project you work on.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
@@ -36,7 +43,8 @@ place.
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
 with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
-Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings, skills). The
+Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings; personal skills and
+instructions go in `~/.ultimate/skills/` and `~/.ultimate/AGENTS.md`). The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
 `ULTIMATE_CHROMIUM=<path>`.
 
@@ -49,10 +57,10 @@ cd ~/Projects/app && ultimate
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
-- **First start** on a machine shows two short pages: a live checklist (log in to a provider, choose a model), then
-  the recommended extensions as checkboxes.
+- **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
+  which offers inline setup cards, reads the project and writes its first tally.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
-  stay off until you choose it; on the first start the question is part of the second page.
+  stay off until you choose it; @ultimate asks with an inline setup card during onboarding.
 - **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
   live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
@@ -113,6 +121,8 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 
 ## What to try
 
+- Start a new project with **Set up with @ultimate** on Start here (or Continue on the first-run Get ready page).
+  Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's tally.
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
   it is being built.
@@ -126,7 +136,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
   Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
   a tab.
-- Hover a message and choose "Branch from here" to fork the conversation at that point.
+- Use **Talk to @ultimate** in the sidebar to ask for work, explore an idea, or start an independent line of work.
 
 ## How it is put together
 

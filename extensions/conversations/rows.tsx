@@ -91,9 +91,9 @@ export function Row({
   draft,
   working,
   unseen,
-  archived,
+  concluded,
   now,
-  onArchive,
+  onConclude,
   feature,
   assessment,
   activity,
@@ -105,9 +105,9 @@ export function Row({
   draft: boolean
   working?: 'self' | 'subagents'
   unseen: boolean
-  archived: boolean
+  concluded: boolean
   now: number
-  onArchive: (archive: boolean) => void
+  onConclude: (conclude: boolean) => void
   assessment?: Assessment
   activity?: string
   feature?: string
@@ -125,12 +125,16 @@ export function Row({
   const name =
     conversation.title ??
     (draft
-      ? 'New conversation'
+      ? 'Untitled conversation'
       : conversation.workspace
         ? 'Untitled conversation'
         : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const lander = conversation.label === 'lander'
+  const standing =
+    conversation.label === 'agent' &&
+    conversation.parentConversationId === undefined &&
+    conversation.ownerTaskId === undefined
   const hasMetadata = root || feature || conversation.workspace || latest > 0 || lander
   const index = useWorkspaceIndex()
   const rename = () => {
@@ -147,7 +151,7 @@ export function Row({
     <span
       className={cn(
         'min-w-0 flex-1 truncate text-[13px]',
-        lander && 'font-semibold text-foreground',
+        (lander || standing) && 'font-semibold text-foreground',
         conversation.title || !draft
           ? shown
             ? 'text-foreground'
@@ -307,10 +311,10 @@ export function Row({
               <EraserIcon />
               Clear context…
             </DropdownMenuItem>
-            {!lander && (
-              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onArchive(!archived)}>
+            {!lander && !standing && (
+              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onConclude(!concluded)}>
                 <CircleCheckIcon />
-                {archived ? 'Resume' : 'Conclude'}
+                {concluded ? 'Resume' : 'Conclude'}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>

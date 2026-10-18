@@ -17,15 +17,18 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
+import type { ConversationsService } from '../conversations/server.ts'
 import { agentRoots } from '../subagents/agents.ts'
 import { empty, git, isolatable, noCommit, noRepository } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export type WorkspaceService = ReturnType<typeof workspaces> & {
   git: typeof git
   doc: typeof Workspaces
+  setupGit(): Promise<void>
 }
 export const order = -200
 export const docs = [Workspaces]
+export const userActions = ['setupGit']
 /** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
 export const reloadOnSettings = true
 const finish = (value: unknown) => ({
@@ -37,7 +40,27 @@ function workspaceId(args: JsonValue) {
     throw new Error('Expected a workspace conversation id')
   return id as ConversationId
 }
+async function setupGit(host: ExtensionHost) {
+  const checkout = await isolatable(host.projectRoot)
+  if (!('reason' in checkout)) return
+  if (!(await empty(host.projectRoot)))
+    throw new Error('This folder has files; ask the agent to choose what the first commit holds')
+  if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
+  else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
+  await git(host.projectRoot, 'commit', '--allow-empty', '--message', 'Initial commit')
+  await workspaces(host).standLander(context)
+}
+
 export const actions = {
+  pending(args: JsonValue, { host }: ActionContext) {
+    const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
+    if (
+      !Array.isArray(ids) ||
+      ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+    )
+      throw new Error('Expected workspace conversation ids')
+    return workspaces(host).pending(ids as number[], context)
+  },
   async create(args: JsonValue, { host }: ActionContext) {
     const input = (args ?? {}) as { cwd?: string; title?: string }
     if (input.cwd !== undefined && typeof input.cwd !== 'string')
@@ -78,14 +101,7 @@ export const actions = {
    * with files needs judgement about what to commit, so it is left to an agent.
    */
   async setupGit(_args: JsonValue, { host }: ActionContext) {
-    const checkout = await isolatable(host.projectRoot)
-    if (!('reason' in checkout)) return {}
-    if (!(await empty(host.projectRoot)))
-      throw new Error('This folder has files; ask the agent to choose what the first commit holds')
-    if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
-    else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
-    await git(host.projectRoot, 'commit', '--allow-empty', '--message', 'Initial commit')
-    await workspaces(host).standLander(context)
+    await setupGit(host)
     return {}
   },
   info(args: JsonValue, { host }: ActionContext) {
@@ -129,7 +145,12 @@ function watchDefinitions(
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
-  host.provide('workspaces', { ...service, git, doc: Workspaces } satisfies WorkspaceService)
+  host.provide('workspaces', {
+    ...service,
+    git,
+    doc: Workspaces,
+    setupGit: () => setupGit(host),
+  } satisfies WorkspaceService)
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)
@@ -137,6 +158,8 @@ export default function workspaceExtension(host: ExtensionHost) {
   let unsubscribe: (() => void) | undefined
   let stopWatching: (() => void) | undefined
   let pending: ReturnType<typeof setTimeout> | undefined
+  let releasing: Promise<unknown> | undefined
+  let releaseController: AbortController | undefined
   // A lander task that faults leaves its queue behind. One run by older code, as on a reload of this code that changed
   // the Workspaces document, is replaced at once; a fault of this code's own task would only repeat, so it waits for
   // the next submit or open. Opening (and each reload while open) picks up any such queue. An aborted task stays
@@ -146,6 +169,16 @@ export default function workspaceExtension(host: ExtensionHost) {
       host.notice(`Lander setup failed: ${String(error)}`)
     })
   host.onOpen(async () => {
+    releaseController = new AbortController()
+    const { signal } = releaseController
+    releasing = (
+      host.use<ConversationsService>('conversations')?.concluded(context) ??
+      Promise.resolve(new Set<ConversationId>())
+    )
+      .then((ids) => service.release([...ids], context, signal))
+      .catch((error: unknown) => {
+        host.notice(`Workspace release failed: ${String(error)}`)
+      })
     unsubscribe?.()
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
@@ -173,6 +206,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     await resume()
   })
   host.onClose(async () => {
+    releaseController?.abort()
+    await releasing
     unsubscribe?.()
     unsubscribe = undefined
     stopWatching?.()
@@ -185,11 +220,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     hooks: [
       hook(ToolTask, {
         beforeTool: async (_call, api, caller) => {
-          const workspace = await service.get(api.conversationId, caller)
-          if (workspace?.state === 'failed')
-            return { block: `Workspace setup failed: ${workspace.error}; start a new conversation` }
-          if (workspace?.state === 'removed')
-            return { block: 'This workspace was removed; start a new conversation' }
+          const reason = await service.unavailable(api.conversationId, caller)
+          if (reason) return { block: reason }
           const landing = await service.landerOwnsCheckout(api.conversationId, caller)
           return landing ? { block: landing } : undefined
         },
@@ -199,15 +231,21 @@ export default function workspaceExtension(host: ExtensionHost) {
       defineTool({
         name: 'workspace',
         description:
-          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back; or land it synchronously by fast-forward (never rebases or pushes).',
+          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back (submit requires divergence from the original request); or land it synchronously by fast-forward (never rebases or pushes).',
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal('status'),
             Type.Literal('submit'),
             Type.Literal('land'),
           ]),
+          divergence: Type.Optional(
+            Type.String({
+              description:
+                "Required for submit. How the delivered result differs from what was originally asked: new agreements, a different approach or library, changed scope. Say 'None' when it matches.",
+            }),
+          ),
         }),
-        async execute({ action }, api, caller) {
+        async execute({ action, divergence }, api, caller) {
           if (action === 'status')
             return finish({
               conversationId: api.conversationId,
@@ -224,7 +262,8 @@ export default function workspaceExtension(host: ExtensionHost) {
             )
               throw new Error(`Only a top-level main conversation can ${action} its own workspace`)
           }, caller)
-          if (action === 'submit') return finish(await service.submit(api.conversationId, caller))
+          if (action === 'submit')
+            return finish(await service.submit(api.conversationId, divergence ?? '', caller))
           return finish(await service.land(api.conversationId, caller, true))
         },
       }),

@@ -11,8 +11,9 @@ import {
   slotItems,
   surfaceItems,
   toolRenderers,
+  linkRenderers,
   messageItems,
-  conversationStarter,
+  composerRenderers,
   composerSubmissions,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
@@ -163,8 +164,12 @@ describe('web extension registry', () => {
       [{ slots: { overlay: { order: 1 } } }, /^slots must/],
       [{ tools: { bash: 'Bash' } }, /^tools must be an object/],
       [{ entries: [Good] }, /^entries must be an object/],
-      [{ composer: {} }, /^composer must be an object/],
-      [{ composer: { subscribe() {}, pending() {}, submit: 'send' } }, /^composer must/],
+      [{ composerSubmission: {} }, /^composerSubmission must be an object/],
+      [
+        { composerSubmission: { subscribe() {}, pending() {}, submit: 'send' } },
+        /^composerSubmission must/,
+      ],
+      [{ link: [Good] }, /^link must be a link renderer component/],
       [{ documents: {} }, /^documents must be an array of \{ kind, title, icon\?, component \}/],
       [{ documents: [{ kind: 'x', title: 'X' }] }, /^documents must/],
       [{ documents: [{ kind: 1, title: 'X', component: Good }] }, /^documents must/],
@@ -204,10 +209,11 @@ describe('web extension registry', () => {
     await registry.setLoaders({
       [path('a')]: async () =>
         module({
-          composer: contribution,
+          composerSubmission: contribution,
+          composer: First,
           slots: { 'composer.attachments': First },
         }),
-      [path('b')]: async () => module({ composer: contribution }),
+      [path('b')]: async () => module({ composerSubmission: contribution }),
       [path('unrelated')]: async () => module({}),
     })
     expect(composerSubmissions(registry.getSnapshot())).toEqual([
@@ -218,6 +224,7 @@ describe('web extension registry', () => {
       slotItems(registry.getSnapshot(), 'composer.attachments').map((item) => item.component),
     ).toEqual([First])
     expect(composerSubmissions([])).toEqual([])
+    expect(composerRenderers(registry.getSnapshot()).map((item) => item.component)).toEqual([First])
   })
 
   it('resolves command ids like surface ids: a later facet wins, in the place of the first', async () => {
@@ -264,6 +271,7 @@ describe('web extension registry', () => {
       [path('a')]: async () =>
         module({
           tools: { bash: First },
+          link: First,
           entries: { 'pi.user': First },
           panels: [{ id: 'info', title: 'Info', component: First, order: 2 }],
           documents: [
@@ -274,6 +282,7 @@ describe('web extension registry', () => {
       [path('b')]: async () =>
         module({
           tools: { bash: Second },
+          link: Second,
           entries: { 'pi.compaction': Second, 'pi.user': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
           documents: [{ kind: 'ultimate.plan', title: 'My plan', component: Second }],
@@ -285,6 +294,11 @@ describe('web extension registry', () => {
       { extension: 'b', version: 1, component: Second },
     ])
     expect(toolRenderers(records, 'read')).toEqual([])
+    // Link renderers compose like tool renderers, each wrapping the one before it.
+    expect(linkRenderers(records)).toEqual([
+      { extension: 'a', version: 1, component: First },
+      { extension: 'b', version: 1, component: Second },
+    ])
     // Entry renderers compose instead of replacing each other: all of them, in folder order.
     expect(entryRenderers(records, 'pi.user').map((renderer) => renderer.extension)).toEqual([
       'a',
@@ -302,22 +316,43 @@ describe('web extension registry', () => {
     expect(documents.has('codemode.store')).toBe(false)
   })
 
-  it('selects the last conversation starter and keeps it after an invalid reload', async () => {
-    const ids = [1, 2]
-    const first = async () => ({ id: ids[0] })
-    const last = async () => ({ id: ids[1] })
+  it('composes all composer renderers in discovery order', async () => {
+    const First = component('alpha')
+    const Second = component('beta')
     const registry = createRegistry()
-    expect(conversationStarter(registry.getSnapshot())).toBeUndefined()
     await registry.setLoaders({
-      [path('builtin-z')]: async () => module({ start: first }),
-      [path('project-a')]: async () => module({ start: last }),
+      [path('alpha')]: async () => module({ composer: First }),
+      [path('beta')]: async () => module({ composer: Second }),
     })
-    expect(await conversationStarter(registry.getSnapshot())!({ prompt: 'hello' })).toEqual({
-      id: 2,
+    const renderers = composerRenderers(registry.getSnapshot())
+    expect(renderers.map((r) => r.extension)).toEqual(['alpha', 'beta'])
+    expect(renderers.map((r) => r.component)).toEqual([First, Second])
+    expect(renderers.reduce((core, r) => `${r.extension}(${core})`, 'core')).toBe(
+      'beta(alpha(core))',
+    )
+  })
+
+  it('lists answer labels independently in discovery order and rejects malformed labels', async () => {
+    const First = component('first')
+    const Second = component('second')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () => module({ answerLabels: [First, Second] }),
+      [path('b')]: async () => module({ answerLabels: [Second] }),
     })
-    registry.replace('project-a', { default: { start: 42 } })
-    expect(registry.getSnapshot()[1]?.error).toBe('start must be a conversation starter function')
-    expect(conversationStarter(registry.getSnapshot())).toBe(last)
+    expect(messageItems(registry.getSnapshot(), 'answerLabels')).toEqual([
+      { key: 'a:0', extension: 'a', version: 1, component: First },
+      { key: 'a:1', extension: 'a', version: 1, component: Second },
+      { key: 'b:0', extension: 'b', version: 1, component: Second },
+    ])
+    expect(messageItems(registry.getSnapshot(), 'messageDetails')).toEqual([])
+    for (const answerLabels of [First, [42]]) {
+      registry.replace('b', { default: { answerLabels } })
+      expect(registry.getSnapshot()[1]?.error).toBe(
+        'answerLabels must be an array of answer label components',
+      )
+      expect(messageItems(registry.getSnapshot(), 'answerLabels')).toHaveLength(3)
+    }
   })
 
   it('lists message actions in discovery and contribution order, validating their shape', async () => {

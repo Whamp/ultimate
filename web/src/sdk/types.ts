@@ -1,7 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord, InboxItem, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
-import type { ConfigureRequest } from '../../../shared/protocol.ts'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -11,8 +10,8 @@ export type SlotName =
   | 'header.right'
   | 'statusline.left'
   | 'statusline.right'
-  | 'composer.toolbar'
   | 'composer.attachments'
+  | 'composer.toolbar'
   | 'composer.status'
   | 'conversation.overlay'
   | 'overlay'
@@ -77,7 +76,16 @@ export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }
 /** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
 export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
 
+/**
+ * A link in Markdown (messages, reports): `href` and the link's `children`, and `core`, the rendering so far, starting
+ * with the default link that asks before opening in a new tab. Return `core` for links you leave alone.
+ */
+export type LinkRenderer = ComponentType<{ href: string; children: ReactNode; core: ReactNode }>
+
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
+
+/** Wraps the shown conversation's composer (`core`); `dock` when it sits in a narrow side region. */
+export type ComposerRenderer = ComponentType<{ core: ReactNode; dock?: boolean }>
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
 export interface DocumentProps {
@@ -97,7 +105,8 @@ export interface DocumentContribution {
 
 /** Navigation and shell actions, passed to commands and returned by `useUltimate()`. */
 export interface UltimateActions {
-  switchConversation: (id: number) => void
+  /** `replace` takes the current browser history entry instead of adding one, as a redirect does. */
+  switchConversation: (id: number, options?: { replace?: boolean }) => void
   /** Show surface `id` (`agent` is the home); the conversation keeps running. */
   showSurface: (id: string) => void
   /** Open the right panel, on tab `id` when given. */
@@ -141,19 +150,6 @@ export interface CommandContribution {
   run(context: UltimateContext): void | Promise<unknown>
 }
 
-/** A composer submission for a new conversation; extensions own how it starts. */
-export interface ConversationDraft {
-  prompt: string
-  images?: { data: string; mimeType: string }[]
-  from?: number
-  at?: number
-  /** Start a new root instead of a branch. */
-  root?: boolean
-  isolated?: boolean
-  model?: { provider: string; modelId: string }
-  thinkingLevel?: ConfigureRequest['thinkingLevel']
-}
-
 /** One explicit composer send, including ordinary text and image attachments. */
 export interface ComposerSubmissionInput {
   conversationId: number
@@ -180,14 +176,18 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
-  /** Pending content participates in the normal composer Send, including annotation-only sends. */
-  composer?: ComposerSubmissionContribution
-  /** Starts a new conversation; the last contribution in discovery order wins. */
-  start?: (draft: ConversationDraft) => Promise<{ id: number }>
+  /** Wraps the shown conversation's composer; facets compose in discovery order, each receiving the previous core. */
+  composer?: ComposerRenderer
+  /** Pending content participates in normal Send without replacing composer renderers. */
+  composerSubmission?: ComposerSubmissionContribution
+  /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
+  link?: LinkRenderer
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Readouts on the hover action row on stored messages, before its time, in discovery order. */
   messageDetails?: readonly ComponentType<{ entry: EntryRecord }>[]
+  /** Inline labels after the Final answer heading on stored assistant messages. */
+  answerLabels?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

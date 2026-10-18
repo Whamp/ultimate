@@ -1,3 +1,12 @@
+/** Work kept when concluding a conversation, including its owned descendants. */
+export type WorkspacePending = {
+  id: number
+  uncommitted: number
+  unlanded: number
+  busy?: string
+  reason?: string
+  descendant?: number
+}
 export type Workspace = {
   path: string
   branch: string
@@ -17,7 +26,9 @@ export type QueueEntry = {
   source: string
   target: string
   tip: string
+  /** Latest submitting conversation entry when submit was called. */
   at: number
+  divergence: string
   state: 'queued' | 'landing'
   subject?: LandingSubject
   step?: string
@@ -51,6 +62,7 @@ export type LanderStep = {
 /** How a submission ended. A push that failed after landing locally is `landed` with a `reason`. */
 export type LanderOutcome = {
   outcome: 'landed' | 'failed'
+  divergence?: string
   sha?: string
   commits?: string[]
   paths?: string[]
@@ -75,6 +87,8 @@ export type LanderEntry = {
   tip: string
   target: string
   at: number
+  /** Submitting conversation breadcrumb, not the log timestamp. */
+  sourceEntry?: number
   step?: string
   check?: LanderCheck
   /** On the submission's first line and its outcome. */
@@ -105,6 +119,8 @@ export type WorkspaceIndex = {
       steps: LanderStep[]
       conversationId?: number
       subject?: LandingSubject
+      at: number
+      divergence: string
     }
   >
 }

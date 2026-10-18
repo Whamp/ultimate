@@ -1,0 +1,36 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ultimate-cloud",
+  "main": "worker.ts",
+  "compatibility_date": "2026-06-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": false,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true, "persist": true },
+    "traces": { "enabled": true, "head_sampling_rate": 1, "persist": true },
+    "issue_detection": { "enabled": true }
+  },
+  "r2_buckets": [{ "binding": "BUILDS", "bucket_name": "ultimate-builds" }],
+  "version_metadata": { "binding": "VERSION" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "REPLICA", "class_name": "ProjectReplica" },
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Replica"] },
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] },
+    { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] },
+    { "tag": "v4", "deleted_classes": ["Replica"] }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/", "/api", "/api/*", "/p/*", "/b/*", "/sync", "/sync/*"]
+  }
+}

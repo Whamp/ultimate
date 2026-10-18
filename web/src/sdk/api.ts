@@ -15,6 +15,11 @@ import type {
 import { errorMessage } from './format.ts'
 import type { Store } from './store.ts'
 
+/** Cloud project URLs keep all API traffic within the selected replica. */
+export function projectBase(path = typeof location === 'undefined' ? '/' : location.pathname) {
+  return /^\/p\/[^/]+\/[^/]+(?=\/|$)/.exec(path)?.[0] ?? ''
+}
+
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */
 export const ROOT = 1
 
@@ -37,6 +42,9 @@ export class ActionError extends Error {
 export const actionMessage = (error: ActionError) =>
   `${error.extension}/${error.action}: ${error.message}`
 
+/** The replica cannot run this operation until the machine reconnects. Not a server failure. */
+export class MachineOfflineError extends Error {}
+
 class HttpError extends Error {
   readonly status: number
   constructor(status: number, message: string) {
@@ -47,7 +55,7 @@ class HttpError extends Error {
 
 /** Commands as `fetch` POSTs. Conversation commands default to the shown conversation. */
 export function createApi(store: Store, options: { base?: string; fetch?: typeof fetch } = {}) {
-  const base = options.base ?? ''
+  const base = options.base ?? projectBase()
   const request = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   async function post<T>(
     path: string,
@@ -62,8 +70,17 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       keepalive,
       signal,
     })
+    store.received(response)
     const data: unknown = await response.json().catch(() => ({}))
     if (!response.ok) {
+      if (
+        response.status === 503 &&
+        data &&
+        typeof data === 'object' &&
+        'offline' in data &&
+        data.offline === true
+      )
+        throw new MachineOfflineError('The machine is offline')
       const error =
         data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
           ? data.error
@@ -95,6 +112,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       const response = await request(base + conversation(id, `history?before=${before}`), {
         signal,
       })
+      store.received(response)
       const data = await response.json()
       if (!response.ok) throw new HttpError(response.status, data.error ?? 'Could not load history')
       return data as HistoryResponse
@@ -111,10 +129,10 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     restart: () => post<unknown>('/api/restart'),
     /**
      * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
-     * on behalf of the shown conversation, and resolve with its result. Rejects with an `ActionError`; one you do not
-     * catch shows as a notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive
-     * the page, such as one sent on `pagehide`. Set `conversationId: null` to omit conversation context; undefined
-     * keeps the default shown conversation.
+     * on behalf of the shown conversation, and resolve with its result. Rejects with `MachineOfflineError` for an
+     * offline replica, otherwise `ActionError`; an uncaught rejection shows as a notice. Aborting `signal` aborts
+     * the action's processes too; `keepalive` lets the call outlive
+     * the page, such as one sent on `pagehide`. Set `conversationId: null` to omit context; undefined uses the shown conversation.
      */
     action: async <T = JsonValue>(
       extension: string,
@@ -127,13 +145,15 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       }: { conversationId?: number | null; signal?: AbortSignal; keepalive?: boolean } = {},
     ): Promise<T> => {
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
-      const body: ExtensionActionRequest = { args }
-      if (conversationId !== null) body.conversationId = conversationId ?? shown()
+      const body: ExtensionActionRequest = {
+        args,
+        conversationId: conversationId === null ? undefined : (conversationId ?? shown()),
+      }
       try {
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
         return result as T
       } catch (error) {
-        if (signal?.aborted) throw error
+        if (signal?.aborted || error instanceof MachineOfflineError) throw error
         throw new ActionError(
           extension,
           name,

@@ -98,18 +98,23 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           </p>
         </div>
       )}
-      {outcome.output && (
-        <Collapsible className="group/tail">
-          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
-            <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/tail:rotate-90" />
-            Output
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ToolOutput className="px-0" isError output={outcome.output} />
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      {outcome.output && <OutputTail output={outcome.output} />}
     </>
+  )
+}
+
+/** A failure's output tail, collapsed. */
+function OutputTail({ output }: { output: string }) {
+  return (
+    <Collapsible className="group/tail">
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/tail:rotate-90" />
+        Output
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ToolOutput className="px-0" isError output={output} />
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -125,6 +130,8 @@ export function LanderReport({ entry }: { entry: EntryRecord }) {
     <div data-lander-report={toneOf(outcome)}>
       <LandingCard
         from={outcome.conversationId ?? own}
+        sourceEntry={outcome.at}
+        divergence={outcome.divergence}
         headline={headline(outcome, outcome.target)}
         subject={outcome.subject}
         tone={toneOf(outcome)}
@@ -234,7 +241,9 @@ function StepLine({
     <Line
       at={row.at}
       icon={
-        failed ? (
+        row.step.startsWith('deploy warning: ') ? (
+          <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
+        ) : failed ? (
           <XIcon className="size-3 shrink-0 text-error" />
         ) : done ? (
           <CheckIcon className="size-3 shrink-0 text-success/70" />
@@ -332,8 +341,10 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   // right before a failed outcome is where it stopped.
   const next = after[0]?.data as LanderEntry | undefined
   const failed = next?.outcome === 'failed'
-  const done = next !== undefined && !failed
+  const deploy = data.step?.startsWith('deploy')
+  const done = deploy || (next !== undefined && !failed)
   const landing =
+    !deploy &&
     busy &&
     inProgress(
       data as LanderStep,
@@ -344,6 +355,8 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
     return (
       <div data-lander-outcome={data.outcome}>
         <LandingCard
+          sourceEntry={data.sourceEntry}
+          divergence={data.divergence}
           at={
             <time className="shrink-0 text-[11px] text-muted-foreground/60">{time(data.at)}</time>
           }
@@ -380,7 +393,16 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
       </div>
     )
   }
-  return <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+  const line = <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+  if (!data.output) return line
+  return (
+    <div className="font-mono text-[11px]">
+      {line}
+      <div className="pl-9">
+        <OutputTail output={data.output} />
+      </div>
+    </div>
+  )
 }
 
 /** The lander task handing a failure to its model: a quiet line naming the mode, above the model's run. */

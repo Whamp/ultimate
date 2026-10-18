@@ -1,9 +1,11 @@
-The project's conversations in the Agent surface's sidebar: branch, switch, rename, clear, and conclude them.
-Several run at once, each a separate agent, and each knows about the others. A summary model (GPT-6 Luna by default)
-automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
+The project's conversations in the Agent surface's sidebar: talk to @ultimate, switch, rename, clear, and conclude them.
+Several branches run at once as separate agents; lineage roots keep their shared tally without running turns.
+A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
 changing the main agent.
 
 ## Sidebar
+
+Ownerless top-level standing agents (label `agent`) are pinned with the lander, sorted by ID, and cannot be concluded or hidden.
 
 The sidebar pins the lander above the roots (lineage's `useRoots()`), each marked with a branch icon and `root`;
 trees sort by their newest input anywhere in them.
@@ -21,7 +23,9 @@ A solid purple dot means an unread reply, not ongoing work; only the pulsing dot
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
 **summary model assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
 coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
-There is no third red blocked/unfinished assessment.
+There is no third red blocked/unfinished assessment. Assessments never trigger question extraction or answer
+cards; [questions](../questions/README.md) extracts only from reply-expected Board messages to the user and from
+@ultimate's final answers to typed input.
 
 A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.
@@ -30,25 +34,26 @@ A child linked to a plan task leads with the plan's `TaskChip` and shows the tas
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-New conversation (the button, `mod+alt+n`, or the palette) opens lineage's start page on the Agent surface.
-It creates nothing until sent; sending calls lineage `branch` from the latest entry of the shown tree's root (else
-the most recently active root), or `newRoot` from its New root tab, with the prompt, chosen model/thinking level and
-any pasted images. The same page serves lineage's "Branch…" and "Branch from here". The dropdown's Isolated and
-Shared choices only select the type, remembered in
-`ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
-in its own checkout without changing that preference. Errors preserve the prompt for retry.
-Conclude and clear context never remove checkouts or commits. The Workspaces panel shows checkouts read-only.
+The sidebar's **Talk to @ultimate** button opens the standing agent on the Agent surface through
+`subagents.standing {name: 'ultimate'}`. @ultimate starts coordinator branches; there are no manual creation commands
+or isolation preferences. A separate Workspaces button opens the read-only checkout panel.
+Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
+unlanded commits, and busy checkouts are kept; Clear context never removes checkouts or commits.
+The Workspaces panel shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation
-itself works, as the server refuses), and Conclude. Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
+itself works, as the server refuses), and Conclude. Before concluding, the UI calls workspaces `pending {ids}`.
+When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
+work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
+Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
 Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
 Concluding the shown subtree shows another live conversation when one exists.
 
-Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
-("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
+Commands, under Conversations: `conversations.reset`
+("Clear the context" of the shown top-level conversation, when it is idle, has entries and is not a listed root), and
 `conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
-ids in `ext.conversations.archived` and, in `ext.conversations.seen`, the latest answer time seen per top-level
+ids in `ext.conversations.concluded` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.
 
 ## Server facet
@@ -66,13 +71,24 @@ such as lineage notes do not.
 
 The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
 conversation's own id and lists the other top-level conversations that have a message and are not concluded (the web
-keeps concluded ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
+reads server-owned concluded ids from UI state `ext.conversations.concluded`): at most the 10 most recently active, listed by id,
 each as `#<id> <title or "untitled">` with its cwd when that differs. It holds no busy state or times, so it changes
 only when that list, a title, or a cwd does, and prompt caches stay warm. It reminds the agent that the others share the
 checkout unless a cwd says otherwise, and how to look at them with codemode's `ultimate.entries(id)` and
 `ultimate.taskGraph()`. Without other conversations there is no section.
 
-Actions, each on a top-level conversation; bad args, unknown conversations, and subagents throw:
+Actions are callable from the browser with `api.action` or by agents with
+`await ultimate.action('conversations', 'conclude', {ids: [N]})` in codemode. The browser never rewrites the concluded
+list. No state-key migration runs automatically.
+
+- `conclude {ids:number[]}`: validates top-level conversations (unknown ids and subagents throw), deduplicates and
+  adds them to `ext.conversations.concluded` in one transaction, then calls workspaces `release`. Returns
+  `{ concluded: number[], kept: {id, uncommitted, unlanded, busy?}[] }`; `kept` explains which checkouts remain.
+- `resume {ids:number[]}`: transactionally removes ids and their concluded ancestors from the list, returning
+  `{ resumed: number[] }` for the removed ids. The next input recreates a released checkout from the target tip;
+  Resume itself does not create one.
+
+The single-conversation actions below reject bad args, unknown conversations, and subagents:
 
 - `rename {id, title}`: sets the `ultimate.metadata` title, with whitespace runs (newlines too) collapsed to one space,
   trimmed, and cut to at most 160 characters; a blank title removes it, so the first message names the conversation
@@ -92,8 +108,8 @@ helper in `summary.ts`: `intent`, `spawn`, and `reply`. The existing version-1 t
 initial intent adds an optional input field, so live reply and spawn tasks remain resumable.
 
 `GenerationTask.beforeRequest` requests an initial title and intent summary before the main model request.
-It inspects stored entries since the current head marker: exactly one user input and no assistant reply,
-only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
+It inspects the conversation's own stored entries since the current head marker (not inherited fork history):
+exactly one user input and no assistant reply, only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
 from requesting it again. Established conversations are not backfilled on later inputs, including when the summary
 model becomes available later. Clear context removes the flag so a new context can request its own intent.
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
@@ -107,6 +123,15 @@ The `GenerationTask.onYield` hook schedules a background observer. It waits for 
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
 The [summary model](#summary-model) assesses each completed reply, including subagent replies, in a background task.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
+For a top-level non-root conversation in a lineage tree, that same request produces an abstract after every completed
+exchange, independent of the title/summary cadence. It uses the original branch intent, previous abstract and transcript:
+Ask, Diverged (agreements, approach/library or scope changes, or none), State (including named commits), Areas and Open
+questions, capped at 1200 characters. Acceptance calls the lineage service's `abstract` in the same transaction as the
+reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract updates
+the open one in place until a landing freezes it (see the lineage README); the root never reorders. Roots, owned
+conversations such as subagents, and conversations outside trees such as landers produce no abstract. Neither do
+stale answers, failed or interrupted exchanges, or missing lineage or summary models. Exchange and intent detection use own entries, so inherited inputs and answers
+do not count as the branch's work.
 A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply assessments.
 Successful subagent creation additionally schedules a parent title/summary refresh in the creation transaction,
 before either foreground waiting or background return. It describes the plan and delegation now starting, using
@@ -165,7 +190,8 @@ footer names the project file to edit. Two actions back it:
 thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
 
 It provides the `conversations` service: `subject(id)` returns a conversation's current title, summary and feature,
-which workspaces snapshots for each submission.
+which workspaces snapshots for each submission. `concluded(caller)` returns a `Promise<Set<ConversationId>>`
+from the server-owned concluded list, used by workspaces to release checkouts on open.
 
 ## How status and summaries flow
 

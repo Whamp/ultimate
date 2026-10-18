@@ -3,13 +3,14 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { Branch, leaveNote } from '../extensions/lineage/server.ts'
-import { Seen } from '../extensions/lineage/catchup.ts'
+import { abstract, leaveNote, Tally } from '../extensions/lineage/server.ts'
+import { Seen, tallyText } from '../extensions/lineage/catchup.ts'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
@@ -256,9 +257,6 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
     })
   ).data.result as { id: ConversationId }
   const branch = (await f.server.harness.conversation(id, context))!
-  await until(
-    async () => (await f.server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
-  )
   await branch.waitForIdle(context)
   const workspace = (await branch.agent(context)).cwd!
   await writeFile(join(workspace, 'schema.ts'), 'own workspace change\n')
@@ -277,4 +275,241 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
   expect(text.split('\n\n').filter((row) => row.startsWith('- '))).toHaveLength(30)
   expect(text).toContain('and 2 more')
   expect(text).toContain('Your workspace is 32 commits behind main; merge it before continuing.')
+})
+
+const branchFrom = async (server: Server, args: Record<string, unknown>) => {
+  // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
+  if (args.from === 1) await seedTally(server.harness)
+  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', { args })
+  expect([status, data.error]).toEqual([200, undefined])
+  const id = data.result.id as ConversationId
+  await (await server.harness.conversation(id, context))!.waitForIdle(context)
+  return id
+}
+const writeAbstract = (server: Server, id: ConversationId, text: string, title?: string) =>
+  server.harness.commit(
+    (tx) => abstract(tx, id, { text, at: 1, ...(title ? { title, feature: 'Tally' } : {}) }),
+    context,
+  )
+const land = (server: Server, from: ConversationId, sha: string, divergence: string) =>
+  leaveNote({ harness: () => server.harness }, 'root', `Landed ${sha.slice(0, 7)}`, {
+    from,
+    source: 'lander',
+    data: { at: 7, divergence, sha, target: 'main', title: `Landing of #${from}` },
+  })
+const catchups = async (server: Server, id: ConversationId) =>
+  (await (await server.harness.conversation(id, context))!.context(context)).entries.filter(
+    (entry) =>
+      entry.conversationId === id &&
+      entry.kind === 'lineage.note' &&
+      (entry.data as { source?: string }).source === 'main',
+  )
+const tipOf = async (server: Server) => (await server.root.context(context)).entries.at(-1)!.id
+
+it('catches a resumed branch up on what its tree learned, then on commits, once each', async () => {
+  const f = await catchupFixture()
+  const own = await branchFrom(f.server, { from: 1, prompt: 'Resume me' })
+  const [reset, node] = (await f.server.root.context(context)).entries
+  expect(node.data).toMatchObject({ branch: own })
+  // The branch was seeded at the tally's tip before its prompt node, so its first input brought no catch-up.
+  expect(reset.kind).toBe('pi.reset')
+  expect((await f.server.harness.snapshot(Seen, own, context))?.tally).toBe(node.id)
+  expect(await catchups(f.server, own)).toEqual([])
+  const second = await branchFrom(f.server, { from: 1, prompt: 'Second feature' })
+  const third = await branchFrom(f.server, { from: 1, prompt: 'Third feature\nwith details' })
+  const fourth = await branchFrom(f.server, { from: 1, prompt: 'Fourth feature' })
+  // Later branches start with the earlier prompt nodes in their context: no catch-up repeats them.
+  for (const id of [second, third, fourth]) expect(await catchups(f.server, id)).toEqual([])
+  await writeAbstract(f.server, own, 'Ask: own work')
+  await writeAbstract(f.server, second, 'Ask: second, first take', 'Second')
+  await writeAbstract(f.server, second, 'Ask: second\nDiverged: none\nState: landed', 'Second')
+  await writeAbstract(f.server, third, 'Ask: third\nState: in progress', 'Third')
+  await land(f.server, second, 'abcdef1234567', 'Used SQLite instead of JSON files')
+  await land(f.server, own, '1234567abcdef', 'None')
+
+  await ask(f.server, own, 'continue')
+  const [note] = await catchups(f.server, own)
+  const text = (note.data as { text: string }).text
+  expect(text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${fourth}** started: Fourth feature`,
+      `**#${third} Third** · Tally — abstract as of #${third}/1:\n- Ask: third\n- State: in progress`,
+      `**#${second} Second** · Tally — state at landing, as of #${second}/1:\n- Ask: second\n- Diverged: none\n- State: landed\n- Landed \`abcdef1\` on main (#${second}/7). Diverged: Used SQLite instead of JSON files`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+  expect(f.requests.at(-1)!.slice(-2)).toEqual([text, 'continue'])
+  expect((await f.server.harness.snapshot(Seen, own, context))?.tally).toBe(await tipOf(f.server))
+
+  // Nothing new in the tree: no tally section and no note.
+  await ask(f.server, own, 'again')
+  expect(await catchups(f.server, own)).toHaveLength(1)
+
+  // Only commits: the commit part alone; then both, the tally first.
+  await writeFile(join(f.projectRoot, 'landed.ts'), 'landed\n')
+  repoGit(f.projectRoot, 'add', '.')
+  repoGit(f.projectRoot, 'commit', '-m', 'Commit only')
+  await ask(f.server, own, 'after a commit')
+  const commitOnly = (await catchups(f.server, own)).at(-1)!.data as { text: string }
+  expect(commitOnly.text).not.toContain('Meanwhile')
+  expect(commitOnly.text).toContain('1 commits landed on main')
+  await writeAbstract(f.server, fourth, 'Ask: fourth\nState: blocked', 'Fourth')
+  // An abstract opened before the last catch-up and updated after it reads as it is now.
+  await writeAbstract(f.server, third, 'Ask: third\nState: done', 'Third')
+  repoGit(f.projectRoot, 'commit', '--allow-empty', '-m', 'Another commit')
+  await ask(f.server, own, 'after both')
+  const both = ((await catchups(f.server, own)).at(-1)!.data as { text: string }).text
+  expect(both.indexOf(`**#${fourth} Fourth**`)).toBeGreaterThan(0)
+  expect(both.indexOf(`**#${fourth} Fourth**`)).toBeLessThan(both.indexOf('Another commit'))
+  expect(both).toContain(
+    `**#${third} Third** · Tally — abstract as of #${third}/1:\n- Ask: third\n- State: done`,
+  )
+  expect(both).not.toContain('Second')
+  expect(await catchups(f.server, own)).toHaveLength(3)
+})
+
+it('collapses the oldest conversations to one line each when the tree outgrew the budget', async () => {
+  const f = await catchupFixture()
+  const own = await branchFrom(f.server, { from: 1, prompt: 'Far behind' })
+  const baseline = (await f.server.harness.snapshot(Seen, own, context))!.tally!
+  const others: ConversationId[] = []
+  for (let n = 0; n < 6; n++) {
+    const id = await branchFrom(f.server, { from: 1, prompt: `Feature ${n}` })
+    await writeAbstract(f.server, id, `Ask: feature ${n}\n${`State: ${n} `.repeat(120)}`, `F${n}`)
+    others.push(id)
+  }
+  await land(f.server, others[0], 'abcdef1234567', 'None')
+  const tree = async () => {
+    const tally = (await f.server.harness.snapshot(Tally, ROOT_CONVERSATION_ID, context))!
+    return { root: ROOT_CONVERSATION_ID, since: tally.since!, abstracts: tally.abstracts }
+  }
+  const t = await tree()
+  const { text } = await f.server.harness.commit(
+    (tx) => tallyText(own, t, baseline, tx, 900),
+    context,
+  )
+  expect(estimateTextTokens(text!)).toBeLessThanOrEqual(900)
+  const [header, collapsed, ...kept] = text!.split('\n\n')
+  expect(header).toBe("Meanwhile in #1's tree:")
+  expect(collapsed.split('\n')).toEqual([
+    'Earlier, collapsed (read them in full with codemode `ultimate.entries(1)`):',
+    `- #${others[1]} F1 · Tally — in progress`,
+    `- #${others[2]} F2 · Tally — in progress`,
+    `- #${others[3]} F3 · Tally — in progress`,
+    `- #${others[4]} F4 · Tally — in progress`,
+  ])
+  // The newest stay in full; the landing made the oldest newest.
+  expect(kept.map((block) => block.split('\n')[0])).toEqual([
+    `**#${others[5]} F5** · Tally — abstract as of #${others[5]}/1:`,
+    `**#${others[0]} F0** · Tally — state at landing, as of #${others[0]}/1:`,
+  ])
+  expect(kept[1]).toContain('- Landed `abcdef1` on main')
+
+  // At the real budget the whole backlog fits and the note carries it verbatim.
+  await ask(f.server, own, 'resume far behind')
+  const note = ((await catchups(f.server, own))[0].data as { text: string }).text
+  expect(note).not.toContain('collapsed')
+  for (const id of others) expect(note).toContain(`**#${id} F`)
+})
+
+it('catches up a conversation without a tally baseline from the tally’s start', async () => {
+  const f = await catchupFixture()
+  const own = await branchFrom(f.server, { from: 1, prompt: 'Old branch' })
+  const other = await branchFrom(f.server, { from: 1, prompt: 'Newer work' })
+  await f.server.harness.commit(async (tx) => {
+    delete (await tx.doc(Seen, own)).tally
+  }, context)
+  await ask(f.server, own, 'resume old')
+  const text = ((await catchups(f.server, own))[0].data as { text: string }).text
+  expect(text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${other}** started: Newer work`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+  expect((await f.server.harness.snapshot(Seen, own, context))?.tally).toBe(await tipOf(f.server))
+})
+
+it('tells a branch its tree’s root was distilled into a tally after it forked', async () => {
+  const f = await catchupFixture()
+  await ask(f.server, ROOT_CONVERSATION_ID, 'We build a tree')
+  const own = await branchFrom(f.server, { from: 1, prompt: 'Branch before the tally' })
+  // Legacy databases can contain a genesis distilled after a branch forked.
+  await f.server.harness.commit(async (tx) => {
+    const entry = await tx.appendEntry(ROOT_CONVERSATION_ID, {
+      kind: 'pi.reset',
+      head: 'self',
+      data: { lineage: { tally: true } },
+      model: [
+        {
+          role: 'user',
+          content: '<tally from="#1/1">\necho We build a tree\n</tally>',
+          timestamp: 0,
+        },
+      ],
+    })
+    ;(await tx.doc(Tally, ROOT_CONVERSATION_ID)).since = entry.id
+  }, context)
+  const genesis = (await f.server.root.context(context)).entries[0]
+  await ask(f.server, own, 'resume after genesis')
+  const text = ((await catchups(f.server, own))[0].data as { text: string }).text
+  expect(text).toMatch(
+    new RegExp(
+      `^Meanwhile in #1's tree:\n\n\\*\\*#1's tally was distilled\\*\\* \\(#1/${genesis.id}\\):\n\necho `,
+    ),
+  )
+  expect(text).not.toContain('<tally')
+})
+
+it('catches a branch up from the tally position it inherited: an older fork point, a branch of a branch', async () => {
+  const f = await catchupFixture()
+  const a = await branchFrom(f.server, { from: 1, prompt: 'Feature A' })
+  const nodeA = (await f.server.root.context(context)).entries.at(-1)!
+  const b = await branchFrom(f.server, { from: 1, prompt: 'Feature B' })
+  await writeAbstract(f.server, b, 'Ask: b\nState: in progress', 'B')
+
+  // Forked at A's node, the branch has not seen B: its first input catches up on it.
+  const c = await branchFrom(f.server, { from: 1, at: nodeA.id, prompt: 'Feature C' })
+  const [early] = await catchups(f.server, c)
+  expect((early.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${b} B** · Tally — abstract as of #${b}/1:\n- Ask: b\n- State: in progress`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+  expect(early.data).toMatchObject({ tally: await tipOf(f.server) })
+
+  // A catches up; a branch of A inherits the position that catch-up left the tally at.
+  await ask(f.server, a, 'continue A')
+  const [caught] = await catchups(f.server, a)
+  expect((caught.data as { tally: number }).tally).toBe(await tipOf(f.server))
+  const d = await branchFrom(f.server, { from: 1, prompt: 'Feature D' })
+  const nested = await branchFrom(f.server, { from: a, prompt: 'Nested in A' })
+  const [late] = await catchups(f.server, nested)
+  expect((late.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${d}** started: Feature D`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+})
+
+it('names a source branch’s prompt when the fork was made before that prompt', async () => {
+  const f = await catchupFixture()
+  const a = await branchFrom(f.server, { from: 1, prompt: 'Feature A' })
+  const forkedAt = (await f.server.harness.commit((tx) => tx.conversation(a), context))!.parent!.at
+  // Forked from A at the tally entry A started from: A's prompt is not in its context.
+  const early = await branchFrom(f.server, { from: a, at: forkedAt, prompt: 'Before A asked' })
+  const [note] = await catchups(f.server, early)
+  expect((note.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${a}** started: Feature A`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
 })

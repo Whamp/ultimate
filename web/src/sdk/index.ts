@@ -7,14 +7,15 @@ export { events, useEvent } from './events.ts'
 export { resumed } from './resume.ts'
 export type {
   CommandContribution,
+  ComposerRenderer,
   ComposerSubmissionContribution,
   ComposerSubmissionInput,
   Contribution,
-  ConversationDraft,
   DocumentContribution,
   DocumentProps,
   EntryRenderer,
   InboxRenderer,
+  LinkRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,
@@ -69,7 +70,7 @@ export {
   useUltimate,
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
-export { useViewport } from './viewport.ts'
+export { touchKeyboard, useViewport } from './viewport.ts'
 export type { Viewport } from './viewport.ts'
 export type { Connection, State } from './store.ts'
 export type { DocumentItem } from './registry.ts'
@@ -120,18 +121,5 @@ export type {
   UserMessage,
 } from '@earendil-works/pi-ai'
 
-export { NewConversationComposer } from '../app/composer.tsx'
-export {
-  useComposer,
-  useComposerEditor,
-  newConversationKey,
-  useNewConversationConfiguration,
-  getNewConversationConfiguration,
-} from './composer.tsx'
-export type {
-  ComposerAutocomplete,
-  ComposerEditor,
-  ComposerSelection,
-  ComposerTarget,
-  NewConversationChoices,
-} from './composer.tsx'
+export { useComposer, useComposerEditor } from './composer.tsx'
+export type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from './composer.tsx'

@@ -7,7 +7,6 @@ import {
   defineWebExtension,
   errorMessage,
   useAction,
-  useComposer,
   useComposerEditor,
   useConversation,
 } from '@/sdk'
@@ -42,9 +41,8 @@ function SkillMenu({
   query: SkillPickerQuery
   dismiss: () => void
 }) {
-  const composer = useComposer()
   const conversation = useConversation()
-  const request = skillPickerRequest(composer.target, conversation.id, composer.source)
+  const request = skillPickerRequest('conversation', conversation.id)
   const skills = useAction<SkillPickerSkill[]>('skill-picker', 'list', request.args, {
     conversationId: request.conversationId,
     // Errors belong in this menu, not in a second global notice.

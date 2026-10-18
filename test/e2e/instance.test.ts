@@ -1,8 +1,9 @@
-import { readFile, symlink, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
 import instance, { actions } from '../../extensions/instance/server.ts'
@@ -36,10 +37,15 @@ async function assertProject(
 }
 async function fixture({ foreign = false } = {}) {
   const root = await temp('ultimate-preview-')
+  // Child hosts must sweep only this fixture, never the machine's real temporary directory.
+  vi.stubEnv('TMPDIR', root)
   const checkout = resolve('.')
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
   await git(source, 'switch', '-c', 'preview-source')
+  await cp(join(checkout, 'extensions/instance'), join(source, 'extensions/instance'), {
+    recursive: true,
+  })
   await symlink(join(checkout, 'node_modules'), join(source, 'node_modules'))
   await writeFile(
     join(source, '.ultimate/settings.json'),
@@ -51,7 +57,7 @@ async function fixture({ foreign = false } = {}) {
     join(source, '.gitignore'),
     (await readFile(join(source, '.gitignore'), 'utf8')) + '\n/node_modules\n',
   )
-  await git(source, 'add', '.ultimate/settings.json', '.gitignore')
+  await git(source, 'add', '.ultimate/settings.json', '.gitignore', 'extensions/instance')
   await git(source, 'commit', '-m', 'Configure preview setup')
   const project = foreign ? join(root, 'app') : source
   if (foreign) {
@@ -61,6 +67,11 @@ async function fixture({ foreign = false } = {}) {
     await git(project, 'commit', '-m', 'Start app')
   }
   new ProjectTrustStore(join(root, '.ultimate')).set(project, true)
+  // Faux previews publish on Tailscale; keep them off the machine's real tailnet.
+  await writeFile(
+    join(root, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['tailscale'] } }),
+  )
   const prepared = await prepareHarness({
     ultimateRoot: source,
     projectRoot: project,
@@ -160,16 +171,36 @@ async function fixture({ foreign = false } = {}) {
     await opened.close()
     for (const preview of previews) await removeTemp(preview.home)
     await removeTemp(root)
+    vi.unstubAllEnvs()
   }
   const list = async () =>
-    (await actions.list(null, { host } as never)) as Omit<Preview, 'home' | 'pid'>[]
-  return { root, source, prepared, opened, service, call, run, list, main, close }
+    (await actions.list(null, { host } as never)) as (Omit<Preview, 'home' | 'pid'> & {
+      tailnet?: string
+      running: boolean
+    })[]
+  return {
+    root,
+    source,
+    prepared,
+    opened,
+    service,
+    services,
+    call,
+    run,
+    list,
+    main,
+    close,
+    stopAll: async () => {
+      for (const cleanup of cleanups) await cleanup()
+    },
+  }
 }
 const listed = (preview: Preview, conversationId: number) => ({
   id: preview.id,
   url: preview.url,
   conversationId,
   faux: true,
+  running: true,
 })
 it('selects shared, isolated main and owned child checkouts with the main project decision', async () => {
   const f = await fixture()
@@ -214,10 +245,39 @@ it('selects shared, isolated main and owned child checkouts with the main projec
         listed(selected, child.conversationId),
       ]),
     )
-    for (const preview of [selected, shared, own]) {
+    // A preview's own tailscale extension registers its port under its pid; the host's status names the DNS name.
+    await writeFile(
+      join(f.root, '.ultimate/tailscale.json'),
+      JSON.stringify({
+        ports: {
+          [main.workspace.path]: { port: 41234, owner: `${own.pid}:token` },
+          '/elsewhere': { port: 41235, owner: '1:token' },
+        },
+      }),
+    )
+    expect((await f.list()).every((preview) => !('tailnet' in preview))).toBe(true)
+    f.services.set('tailscale', {
+      status: () => ({ state: 'ready', url: 'https://rog.example.ts.net:4747', allow: [] }),
+    })
+    expect(
+      Object.fromEntries((await f.list()).map((preview) => [preview.id, preview.tailnet])),
+    ).toEqual({
+      [own.id]: 'https://rog.example.ts.net:41234',
+      [shared.id]: undefined,
+      [selected.id]: undefined,
+    })
+    for (const [preview, conversationId] of [
+      [selected, child.conversationId],
+      [shared, f.opened.root.id],
+      [own, main.id],
+    ] as const) {
       expect(await f.call('instance', { action: 'logs', id: preview.id })).toContain(preview.url)
       await f.run({ action: 'stop', id: preview.id })
-      expect((await f.list()).map(({ id }) => id)).not.toContain(preview.id)
+      // Stopped previews stay listed as not running, without a tailnet address, so links to them can say so.
+      expect((await f.list()).find(({ id }) => id === preview.id)).toEqual({
+        ...listed(preview, conversationId),
+        running: false,
+      })
       await removeTemp(preview.home)
     }
     await f.service.discard(child.conversationId, context)
@@ -267,9 +327,49 @@ it('cleans up a failed or aborted preview and allows its home to be reused', asy
     const preview = JSON.parse(
       await f.run({ action: 'start', home, faux: true }, main.id),
     ) as Preview
+    const retained = join(home, 'worktrees', 'retained')
+    await git(f.source, 'worktree', 'add', '-b', 'retained-preview', retained)
     process.kill(preview.pid, 'SIGTERM')
     await until(async () => JSON.parse(await f.run({ action: 'list' })).length === 0)
+    // Exited on its own, the preview stays listed as not running; a start that failed never was.
+    expect((await f.list()).map(({ id, running }) => ({ id, running }))).toEqual([
+      { id: preview.id, running: false },
+    ])
     await f.run({ action: 'stop', id: preview.id })
+    expect((await stat(home)).isDirectory()).toBe(true)
+    expect(await git(f.source, 'worktree', 'list', '--porcelain')).toContain(retained)
+    expect(await git(f.source, 'branch', '--format=%(refname)')).toContain(
+      'refs/heads/retained-preview',
+    )
+    expect((await f.list()).map(({ id, running }) => ({ id, running }))).toEqual([
+      { id: preview.id, running: false },
+    ])
+  } finally {
+    await f.close()
+  }
+}, 120000)
+
+it('removes preview registrations, branches and temporary homes on stop and shutdown', async () => {
+  const f = await fixture()
+  try {
+    const beforeTrees = await git(f.source, 'worktree', 'list', '--porcelain')
+    const beforeBranches = await git(f.source, 'branch', '--format=%(refname)')
+    for (const shutdown of [false, true]) {
+      const preview = JSON.parse(await f.run({ action: 'start', faux: true })) as Preview
+      await until(async () =>
+        (await git(f.source, 'worktree', 'list', '--porcelain')).includes(preview.home),
+      )
+      // Include a dirty, branch-backed preview isolate as well as the detached lander created on open.
+      const worker = join(preview.home, 'worktrees', 'test')
+      const branch = `ultimate/${createHash('sha256').update(preview.home).digest('hex').slice(0, 6)}-1`
+      await git(f.source, 'worktree', 'add', '-b', branch, worker)
+      await writeFile(join(worker, 'scratch'), 'uncommitted preview scratch')
+      if (shutdown) await f.stopAll()
+      else await f.run({ action: 'stop', id: preview.id })
+      expect(await stat(preview.home).catch(() => undefined)).toBeUndefined()
+      expect(await git(f.source, 'worktree', 'list', '--porcelain')).toBe(beforeTrees)
+      expect(await git(f.source, 'branch', '--format=%(refname)')).toBe(beforeBranches)
+    }
   } finally {
     await f.close()
   }

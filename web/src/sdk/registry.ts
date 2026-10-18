@@ -3,11 +3,13 @@ import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   CommandContribution,
+  ComposerRenderer,
   ComposerSubmissionContribution,
   Contribution,
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
+  LinkRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,
@@ -30,6 +32,11 @@ export interface ExtensionRecord {
   version: number
 }
 
+export interface ComposerSubmissionItem {
+  extension: string
+  contribution: ComposerSubmissionContribution
+}
+
 export interface SlotItem {
   key: string
   extension: string
@@ -46,11 +53,6 @@ export interface SurfaceItem extends SurfaceContribution {
 }
 export interface CommandItem extends CommandContribution {
   extension: string
-}
-/** A composer transport together with its owning extension, in discovery order. */
-export interface ComposerSubmissionItem {
-  extension: string
-  contribution: ComposerSubmissionContribution
 }
 export interface DocumentItem extends DocumentContribution {
   extension: string
@@ -122,13 +124,15 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
-  composer: [
+  composer: [isComponent, 'a composer renderer component'],
+  composerSubmission: [
     fields({ subscribe: isFunction, pending: isFunction, submit: isFunction }),
     'an object of { subscribe, pending, submit } functions',
   ],
-  start: [isFunction, 'a conversation starter function'],
+  link: [isComponent, 'a link renderer component'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
+  answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
   documents: [
     arrayOf(
       fields({
@@ -324,13 +328,6 @@ export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {
     .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
 }
 
-/** Composer transports never override one another; conflicting pending transports block Send. */
-export function composerSubmissions(records: readonly ExtensionRecord[]): ComposerSubmissionItem[] {
-  return records.flatMap(({ name, extension }) =>
-    extension?.composer ? [{ extension: name, contribution: extension.composer }] : [],
-  )
-}
-
 /** The home surface: shown by default, and whenever the chosen surface cannot be. */
 export const HOME = 'agent'
 
@@ -408,6 +405,16 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
   return byKind
 }
 
+export function composerRenderers(
+  records: readonly ExtensionRecord[],
+): { extension: string; version: number; component: ComposerRenderer }[] {
+  return records.flatMap((record) =>
+    record.extension?.composer
+      ? [{ extension: record.name, version: record.version, component: record.extension.composer }]
+      : [],
+  )
+}
+
 export function inboxRenderer(
   records: readonly ExtensionRecord[],
 ): { extension: string; version: number; component: InboxRenderer } | undefined {
@@ -439,10 +446,20 @@ export function toolRenderers(
   })
 }
 
-/** Hover actions or details on stored messages, preserving discovery order and each facet's array order. */
+/** Every Markdown link renderer in discovery order: each receives the previous rendering as `core`. */
+export function linkRenderers(
+  records: readonly ExtensionRecord[],
+): { extension: string; version: number; component: LinkRenderer }[] {
+  return records.flatMap((record) => {
+    const component = record.extension?.link
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** Message contributions, preserving discovery order and each facet's array order. */
 export function messageItems(
   records: readonly ExtensionRecord[],
-  contribution: 'messageActions' | 'messageDetails',
+  contribution: 'messageActions' | 'messageDetails' | 'answerLabels',
 ) {
   return records.flatMap(({ name, extension, version }) =>
     (extension?.[contribution] ?? []).map((component, index) => ({
@@ -454,7 +471,11 @@ export function messageItems(
   )
 }
 
-/** The last new-conversation starter in discovery order. */
-export function conversationStarter(records: readonly ExtensionRecord[]) {
-  return records.toReversed().find((record) => record.extension?.start)?.extension?.start
+/** Pending send transports, separate from composer renderers. */
+export function composerSubmissions(records: readonly ExtensionRecord[]): ComposerSubmissionItem[] {
+  return records.flatMap(({ name, extension }) =>
+    extension?.composerSubmission
+      ? [{ extension: name, contribution: extension.composerSubmission }]
+      : [],
+  )
 }

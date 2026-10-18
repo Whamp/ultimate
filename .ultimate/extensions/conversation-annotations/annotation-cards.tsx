@@ -1,7 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { MessageSquareIcon, RotateCwIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
-import { api, events, useComposer, useConversation, useDoc } from '@/sdk'
+import { api, events, useConversation, useDoc } from '@/sdk'
 import { annotationBreadcrumb, sameAnnotationField } from './annotation-domain.ts'
 import type { AnnotationSource, AnnotationState } from './annotation-domain.ts'
 import { annotationDraftStore, useAnnotationDrafts } from './annotation-client.tsx'
@@ -34,9 +34,8 @@ export function AnnotationQuote({ source }: { source: AnnotationSource }) {
 
 /** Editable cards above the ordinary textarea. Adding/editing/removing never submits an input. */
 export function AnnotationAttachments() {
-  const composer = useComposer()
   const { id } = useConversation()
-  if (composer.target !== 'conversation' || id === undefined) {
+  if (id === undefined) {
     return null
   }
   return <PendingCards key={id} conversationId={id} />

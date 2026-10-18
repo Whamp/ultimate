@@ -1,25 +1,31 @@
-import { ChevronRightIcon, ChevronDownIcon, SquarePenIcon } from 'lucide-react'
-import { useEffect } from 'react'
+import { ChevronRightIcon, GitBranchIcon, MessageCircleIcon } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { formatKeys, useExtensionUiState, useNow, useStore, useTasks, useUltimate } from '@/sdk'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import type { WorkspacePending } from '../workspaces/types.ts'
+import {
+  api,
+  cn,
+  errorMessage,
+  useExtensionUiState,
+  useNow,
+  useStore,
+  useSystem,
+  useTasks,
+  useUltimate,
+} from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
-import { newKeys } from './new.tsx'
 import { useRoots } from '../lineage/roots.tsx'
+import { talkToUltimate } from './ultimate.tsx'
+
+/** The label of side chats with a tally, which old projects still store; they stay unlisted. */
+const sideLabel = 'side chat'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -54,15 +60,11 @@ function workingByTop(conversations: readonly ConversationSummary[]) {
 const byInput = (a: ConversationSummary, b: ConversationSummary) =>
   (b.inputAt ?? 0) - (a.inputAt ?? 0) || b.id - a.id
 
-function Shortcut({ keys }: { keys: string }) {
-  return (
-    <KbdGroup>
-      {formatKeys(keys)[0]?.map((key) => (
-        <Kbd key={key}>{key}</Kbd>
-      ))}
-    </KbdGroup>
-  )
-}
+const pinned = (conversation: ConversationSummary) =>
+  conversation.label === 'lander' ||
+  (conversation.label === 'agent' &&
+    conversation.parentConversationId === undefined &&
+    conversation.ownerTaskId === undefined)
 
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
@@ -74,18 +76,22 @@ export function Conversations() {
       .map((task) => task.conversationId),
   )
   // The task graph reflects the run; the timestamp/title list can lag.
-  const conversations = useConversations().map((conversation) => ({
-    ...conversation,
-    busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
-  }))
+  const conversations = useConversations()
+    .filter((conversation) => conversation.label !== sideLabel)
+    .map((conversation) => ({
+      ...conversation,
+      busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
+    }))
   const actions = useUltimate()
+  const workspacesEnabled = useSystem()?.extensions.some(
+    (extension) => extension.name === 'workspaces' && extension.enabled,
+  )
   const shownId = useShownId()
   const now = useNow(60_000)
-  const [type, setType] = useExtensionUiState('creationType', 'isolated')
-  const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
+  const [concludedIds] = useExtensionUiState<number[]>('concluded', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
-  const hiddenIds = hiddenConversationIds(conversations, archived)
+  const hiddenIds = hiddenConversationIds(conversations, concludedIds)
   const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
   const roots = new Set(useRoots())
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
@@ -94,15 +100,13 @@ export function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // Lander conversations are always there, pinned above the rest and never archived.
-  const landers = topLevel
-    .filter((conversation) => conversation.label === 'lander')
-    .toSorted((a, b) => a.id - b.id)
+  // Standing agents and landers are pinned above the rest and never concluded.
+  const landers = topLevel.filter(pinned).toSorted((a, b) => a.id - b.id)
   const listed = topLevel
-    .filter((conversation) => conversation.label !== 'lander' && !hiddenIds.has(conversation.id))
+    .filter((conversation) => !pinned(conversation) && !hiddenIds.has(conversation.id))
     .toSorted(byInput)
   const hidden = topLevel
-    .filter((conversation) => conversation.label !== 'lander' && hiddenIds.has(conversation.id))
+    .filter((conversation) => !pinned(conversation) && hiddenIds.has(conversation.id))
     .toSorted(byInput)
   const earlier = listed.filter(
     (conversation) => !roots.has(conversation.id) && !conversation.branchOf,
@@ -125,28 +129,39 @@ export function Conversations() {
     .filter((conversation) => roots.has(conversation.id))
     .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
-  const setArchive = (id: number, archive: boolean) => {
-    const resumed = new Set([id])
-    if (!archive) {
-      let current = conversations.find((conversation) => conversation.id === id)
-      while (current?.branchOf && !resumed.has(current.branchOf.conversationId)) {
-        resumed.add(current.branchOf.conversationId)
-        current = conversations.find(
-          (conversation) => conversation.id === current?.branchOf?.conversationId,
-        )
-      }
-    }
-    setArchived((previous) => [
-      ...previous.filter((candidate) => !resumed.has(candidate)),
-      ...(archive ? [id] : []),
-    ])
-    if (!archive || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
+  const [warning, setWarning] = useState<{
+    id: number
+    work?: WorkspacePending[]
+    failure?: string
+  }>()
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string>()
+  const setConclude = async (id: number, conclude: boolean) => {
+    await api.action('conversations', conclude ? 'conclude' : 'resume', { ids: [id] })
+    if (!conclude || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
     const index = listed.findIndex((conversation) => conversation.id === id)
     const subtree = hiddenConversationIds(conversations, [id])
     const next =
       listed.slice(index + 1).find((candidate) => !subtree.has(candidate.id)) ??
       listed.find((candidate) => !subtree.has(candidate.id))
     if (next) actions.switchConversation(next.id)
+  }
+  const requestConclude = async (id: number, conclude: boolean) => {
+    if (conclude && workspacesEnabled) {
+      setError(undefined)
+      try {
+        const work = await api.action<WorkspacePending[]>('workspaces', 'pending', { ids: [id] })
+        if (work.length) {
+          setWarning({ id, work })
+          return
+        }
+      } catch (failure) {
+        setWarning({ id, failure: errorMessage(failure) })
+        // Unhandled ActionErrors become notices; the dialog still lets the user conclude.
+        throw failure
+      }
+    }
+    await setConclude(id, conclude)
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     const recorded = seen[conversation.id]
@@ -155,14 +170,14 @@ export function Conversations() {
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
-        archived={hiddenIds.has(conversation.id)}
+        concluded={!pinned(conversation) && hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}
         key={conversation.id}
         now={now}
-        onArchive={(archive) => setArchive(conversation.id, archive)}
+        onConclude={(conclude) => void requestConclude(conversation.id, conclude)}
         shown={shown}
         unseen={
           recorded !== undefined &&
@@ -270,55 +285,101 @@ export function Conversations() {
 
   return (
     <div className="flex flex-1 flex-col pb-2">
+      <Dialog
+        open={!!warning}
+        onOpenChange={(open) => {
+          if (!open) setWarning(undefined)
+        }}
+      >
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md" showCloseButton={false}>
+          <div className="px-5 pt-5 pb-4">
+            <DialogTitle className="text-[14px] font-medium">Conclude #{warning?.id}?</DialogTitle>
+            <DialogDescription className="mt-2 text-[13px] leading-relaxed break-words">
+              {warning?.failure ? (
+                <>
+                  Couldn't check #{warning.id}'s checkout: {warning.failure}. Conclude anyway?
+                </>
+              ) : (
+                <>
+                  {warning?.work
+                    ?.map((item) => {
+                      const parts = [
+                        item.uncommitted > 0
+                          ? `${item.uncommitted} uncommitted ${item.uncommitted === 1 ? 'file' : 'files'}`
+                          : undefined,
+                        item.unlanded > 0
+                          ? `${item.unlanded} unlanded ${item.unlanded === 1 ? 'commit' : 'commits'}`
+                          : undefined,
+                      ].filter(Boolean)
+                      return `#${item.id}${item.id !== warning.id ? ', a subagent,' : ''} has ${parts.join(' and ')}.`
+                    })
+                    .join(' ')}{' '}
+                  Its checkout is kept until that work lands or is discarded.
+                </>
+              )}
+            </DialogDescription>
+            {error && <p className="mt-3 font-mono text-[12px] break-words text-error">{error}</p>}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
+            <Button onClick={() => setWarning(undefined)} size="sm" variant="ghost">
+              Cancel
+            </Button>
+            <Button
+              disabled={pending}
+              size="sm"
+              onClick={async () => {
+                if (!warning) return
+                setPending(true)
+                try {
+                  await setConclude(warning.id, true)
+                  setWarning(undefined)
+                } catch (failure) {
+                  setError(errorMessage(failure))
+                } finally {
+                  setPending(false)
+                }
+              }}
+            >
+              {pending ? 'Concluding…' : 'Conclude'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="mb-1 flex h-10 shrink-0 items-center gap-2 border-b border-border/70 pr-1.5 pl-4 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
         Conversations
+        {workspacesEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Workspaces"
+                className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
+                onClick={() => actions.openPanel('workspaces')}
+                size="icon"
+                variant="ghost"
+              >
+                <GitBranchIcon className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Workspaces</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              aria-label="New conversation"
-              className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
-              onClick={() => actions.runCommand('conversations.new')}
+              aria-label="Talk to @ultimate"
+              className={cn(
+                'size-7 cursor-pointer text-muted-foreground hover:text-foreground',
+                !workspacesEnabled && 'ml-auto',
+              )}
+              onClick={() => void talkToUltimate(actions)}
               size="icon"
               variant="ghost"
             >
-              <SquarePenIcon className="size-4" />
+              <MessageCircleIcon className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent className="flex items-center gap-2">
-            New {type === 'shared' ? 'shared' : 'isolated'} conversation
-            <Shortcut keys={newKeys} />
-          </TooltipContent>
+          <TooltipContent>Talk to @ultimate</TooltipContent>
         </Tooltip>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger
-            aria-label="Conversation creation options"
-            className="flex size-6 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuRadioGroup
-              value={type}
-              onValueChange={(value) => {
-                setType(value)
-              }}
-            >
-              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="isolated">
-                Isolated
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="shared">
-                Shared (not isolated)
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-            <div role="separator" className="my-1 border-t border-border" />
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.openPanel('workspaces')}
-            >
-              Workspaces
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {landers.length > 0 && (
@@ -382,8 +443,8 @@ export function Conversations() {
         )}
         {hidden.length > 0 && (
           <Collapsible className="pt-1">
-            <CollapsibleTrigger className="group/archived flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
-              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/archived:rotate-90" />
+            <CollapsibleTrigger className="group/concluded flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/concluded:rotate-90" />
               Concluded · {hidden.length}
             </CollapsibleTrigger>
             <CollapsibleContent

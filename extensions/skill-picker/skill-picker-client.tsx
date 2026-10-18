@@ -1,4 +1,4 @@
-import type { ComposerSelection, ComposerTarget } from '@/sdk'
+import type { ComposerSelection } from '@/sdk'
 
 import type { SkillPickerSkill } from './skill-picker-types.ts'
 
@@ -123,7 +123,7 @@ export function skillReference(skill: SkillPickerSkill): string {
 
 /** New composers must not inherit the shown conversation's cwd; null explicitly requests project context. */
 export function skillPickerRequest(
-  target: ComposerTarget,
+  target: 'conversation' | 'new',
   conversationId?: number,
   source?: number,
 ) {

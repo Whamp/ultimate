@@ -62,7 +62,12 @@ else if (args[0] === 'serve') {
     }
   }
   const live = new Set<string>()
-  async function instance(projectRoot = '/project/a', localPort = 4747) {
+  async function instance(
+    projectRoot = '/project/a',
+    localPort = 4747,
+    serverHome = '/homes/a',
+    faux = false,
+  ) {
     const url = `http://127.0.0.1:${localPort}`
     live.add(url)
     const openers: (() => Promise<void>)[] = []
@@ -71,13 +76,16 @@ else if (args[0] === 'serve') {
     const access = createAccess()
     const host = {
       userHome: home,
+      home: serverHome,
       projectRoot,
+      ...(faux && { faux: {} }),
       projects: async () => [...live].map((liveUrl) => ({ running: { url: liveUrl } })),
       access,
       notice: (message: string) => notices.push(message),
       system: () => ({ process: { url: `http://127.0.0.1:${localPort}` } }),
       onOpen: (fn: () => Promise<void>) => openers.push(fn),
       onClose: (fn: () => Promise<void>) => cleanups.push(fn),
+      provide: () => {},
     } as unknown as ExtensionHost
     tailscale(host)
     let closed = false
@@ -440,6 +448,62 @@ it('keeps a live preview owner absent from the project supervisor list', async (
   const app = await f.instance()
   expect((await app.status()).state).toBe('ready')
   expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
+})
+it('gives a preview of the same project its own port and frees it when the preview ends', async () => {
+  const f = await fixture()
+  const registry = async () =>
+    JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports
+  const app = await f.instance('/project/a', 4747)
+  expect((await app.status()).url).toBe('https://rog.example.ts.net:4747')
+  vi.stubEnv('ULTIMATE_INSTANCE_OWNER', String(process.pid))
+  const preview = await f.instance('/project/a', 4800, '/tmp/preview-home')
+  expect((await preview.status()).url).toBe('https://rog.example.ts.net:4800')
+  expect(await registry()).toMatchObject({
+    '/project/a': { port: 4747 },
+    '/tmp/preview-home': { port: 4800, temporary: true },
+  })
+  await preview.close()
+  expect(Object.keys(await registry())).toEqual(['/project/a'])
+  expect((await app.status()).url).toBe('https://rog.example.ts.net:4747')
+})
+it('publishes a faux preview and frees its port when it ends', async () => {
+  const f = await fixture()
+  vi.stubEnv('ULTIMATE_INSTANCE_OWNER', String(process.pid))
+  const preview = await f.instance('/project/a', 4800, '/tmp/faux-preview', true)
+  expect(await preview.status()).toMatchObject({
+    state: 'ready',
+    url: 'https://rog.example.ts.net:4800',
+    allow: ['owner@example.com'],
+  })
+  expect(
+    (await f.invocations()).some(
+      (args) => args.includes('--https=4800') && args.includes('http://127.0.0.1:4800'),
+    ),
+  ).toBe(true)
+  await preview.close()
+  expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
+  expect(
+    JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
+  ).toEqual({})
+})
+it('drops the entry of a preview that died without closing', async () => {
+  const f = await fixture({
+    serve: {
+      Web: { 'rog.example.ts.net:4800': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } } },
+    },
+  })
+  await writeFile(
+    join(f.home, '.ultimate/tailscale.json'),
+    JSON.stringify({
+      ports: { '/tmp/gone': { port: 4800, owner: '2147483647:gone', temporary: true } },
+    }),
+  )
+  const app = await f.instance()
+  expect((await app.status()).state).toBe('ready')
+  expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
+  expect(
+    Object.keys(JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports),
+  ).toEqual(['/project/a'])
 })
 it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
   const f = await fixture()

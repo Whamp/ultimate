@@ -3,7 +3,7 @@ import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import {
   PromptInput,
   PromptInputFooter,
@@ -14,15 +14,16 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
+import { TranscriptContext, useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
+import { touchKeyboard } from '../sdk/viewport.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { composerSubmissions, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
-import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
+import { composerRenderers, composerSubmissions, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
-import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
+import { ComposerContext } from '../sdk/composer.tsx'
 import type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from '../sdk/composer.tsx'
+import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -111,35 +112,28 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
 }
 
 export function Composer({ dock }: { dock?: boolean }) {
-  const { id } = useConversation()
-  return <ConversationComposer dock={dock} key={id} />
-}
-
-/**
- * Where a new conversation branches from: a conversation and, optionally, one of its entries; default the root of the
- * shown tree. `root` starts a new root instead.
- */
-export type BranchPoint = { from?: number; at?: number; root?: boolean }
-
-export function NewConversationComposer({
-  inputId,
-  onStarted,
-  isolated,
-  branch,
-}: {
-  isolated?: boolean
-  inputId?: string
-  onStarted: (id: number) => void
-  branch?: BranchPoint
-}) {
+  const { id, entries } = useConversation()
+  const renderers = composerRenderers(useExtensions())
+  const core = renderers.reduce<ReactNode>(
+    (previous, renderer) => {
+      const Renderer = renderer.component
+      return (
+        <ExtensionBoundary
+          key={renderer.extension}
+          extension={renderer.extension}
+          fallback={previous}
+          version={renderer.version}
+        >
+          <Renderer core={previous} dock={dock} />
+        </ExtensionBoundary>
+      )
+    },
+    <ConversationComposer dock={dock} key={id} />,
+  )
   return (
-    <ConversationComposer
-      target="new"
-      isolated={isolated}
-      inputId={inputId}
-      onStarted={onStarted}
-      branch={branch}
-    />
+    <TranscriptContext value={entries}>
+      <ComposerContext value={{ draft: draftAccess(getDraft(id)) }}>{core}</ComposerContext>
+    </TranscriptContext>
   )
 }
 
@@ -178,49 +172,31 @@ function createDraft(id: number | string | undefined) {
   }
 }
 
-function ConversationComposer({
-  dock,
-  target = 'conversation',
-  inputId,
-  onStarted,
-  isolated: isolation,
-  branch: point,
-}: {
-  isolated?: boolean
-  branch?: BranchPoint
-  dock?: boolean
-  target?: 'conversation' | 'new'
-  inputId?: string
-  onStarted?: (id: number) => void
-}) {
-  const conversation = useConversation()
-  const isNew = target === 'new'
-  const { id, agent } = conversation
-  const busy = !isNew && conversation.busy
-  // A branch starts with its source's current configuration, a new root with the project default; what shows is sent.
-  const source = isNew && !point?.root ? point?.from : undefined
-  const defaults = useNewConversationConfiguration(isNew, source)
-  const loading = isNew ? defaults.loading : conversation.loading
-  const inbox = isNew ? [] : conversation.inbox
-  const extensions = useExtensions()
-  const start = conversationStarter(extensions)
-  const transports = useMemo(() => composerSubmissions(extensions), [extensions])
-  const submissionId = isNew ? undefined : id
-  const submissions = useMemo(
-    () => createComposerSubmissionStore(transports, submissionId),
-    [transports, submissionId],
-  )
-  const pendingSubmissions = useSyncExternalStore(submissions.subscribe, submissions.getSnapshot)
-  // New and each branch point keep their own draft.
-  const draftId = isNew
-    ? point?.root
-      ? 'root'
-      : point?.from === undefined
-        ? 'new'
-        : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
-    : id
-  if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
-  const draft = drafts.get(draftId)!
+function getDraft(id: number | string | undefined) {
+  if (!drafts.has(id)) drafts.set(id, createDraft(id))
+  return drafts.get(id)!
+}
+
+function clearDraft(
+  draft: ReturnType<typeof createDraft>,
+  snapshot: { text: string; revision: number },
+) {
+  const stored = draft.key ? (localStorage.getItem(draft.key) ?? '') : ''
+  if (draft.get().revision !== snapshot.revision) return
+  if (draft.key && stored === snapshot.text) localStorage.removeItem(draft.key)
+  draft.set({ text: stored === snapshot.text ? '' : stored })
+}
+
+function draftAccess(draft: ReturnType<typeof createDraft>) {
+  return {
+    read: () => ({ text: draft.get().text, revision: draft.get().revision }),
+    clear: (snapshot: { text: string; revision: number }) => clearDraft(draft, snapshot),
+  }
+}
+
+function ConversationComposer({ dock }: { dock?: boolean }) {
+  const { id, agent, busy, loading, inbox } = useConversation()
+  const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const pendingSelection = useRef<number | null>(null)
@@ -262,6 +238,10 @@ function ConversationComposer({
   }, [text, selection])
   const select = (element: HTMLTextAreaElement) =>
     setSelection({ start: element.selectionStart, end: element.selectionEnd })
+  const extensions = useExtensions()
+  const transports = useMemo(() => composerSubmissions(extensions), [extensions])
+  const submissions = useMemo(() => createComposerSubmissionStore(transports, id), [transports, id])
+  const pendingSubmissions = useSyncExternalStore(submissions.subscribe, submissions.getSnapshot)
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
@@ -274,7 +254,7 @@ function ConversationComposer({
   const models = useModels()
   const key = draft.key
   useEffect(() => {
-    const stored = key ? (localStorage.getItem(key) ?? '') : ''
+    const stored = (key ? localStorage.getItem(key) : null) ?? ''
     if (stored !== draft.get().text) draft.set({ text: stored, revision: draft.get().revision + 1 })
   }, [draft, key])
   const update = (value: string) => {
@@ -313,67 +293,30 @@ function ConversationComposer({
   const blocked =
     pendingSubmissions > 1
       ? composerSubmissionConflict
-      : isNew && !start
-        ? 'No extension provides a conversation starter.'
-        : loading || (isNew && !defaults.available)
-          ? undefined
-          : isNew && defaults.error
-            ? errorMessage(defaults.error)
-            : blockedBy(isNew ? defaults.configuration : agent, models)
+      : loading
+        ? undefined
+        : blockedBy(agent, models)
   const empty = !text.trim() && images.length === 0 && pendingSubmissions === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
-    if (
-      loading ||
-      empty ||
-      blocked ||
-      draft.get().sending ||
-      pending.current ||
-      (!isNew && id === undefined)
-    )
+    if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
       return
     const submitted = draft.get()
     draft.set({ sending: true, error: undefined })
     try {
-      let startedId: number | undefined
-      if (isNew) {
-        startedId = (
-          await start!({
-            prompt: text.trim(),
-            ...(images.length ? { images } : {}),
-            ...(point?.from === undefined ? {} : { from: point.from }),
-            ...(point?.at === undefined ? {} : { at: point.at }),
-            ...(point?.root ? { root: true } : {}),
-            ...(isolation === undefined ? {} : { isolated: isolation }),
-            ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
-            ...(defaults.configuration.thinkingLevel
-              ? { thinkingLevel: defaults.configuration.thinkingLevel }
-              : {}),
-          })
-        ).id
-      } else if (id !== undefined) {
-        await submissions.submit(
-          {
-            conversationId: id,
-            text: submitted.text.trim(),
-            images: submitted.images,
-            whenBusy: busy ? (whenBusy ?? 'steer') : undefined,
-          },
-          async (input) => {
-            await api.submit(input.text, input.whenBusy, input.conversationId, input.images)
-          },
-        )
-      }
-      const stored = key ? (localStorage.getItem(key) ?? '') : ''
-      if (key && stored === submitted.text && draft.get().revision === submitted.revision)
-        localStorage.removeItem(key)
-      draft.set({
-        ...(draft.get().revision === submitted.revision
-          ? { text: stored === submitted.text ? '' : stored }
-          : {}),
-        ...(draft.get().images === submitted.images ? { images: [] } : {}),
-      })
-      if (startedId !== undefined) onStarted?.(startedId)
+      await submissions.submit(
+        {
+          conversationId: id,
+          text: submitted.text.trim(),
+          images: submitted.images,
+          whenBusy: busy ? (whenBusy ?? 'steer') : undefined,
+        },
+        async (input) => {
+          await api.submit(input.text, input.whenBusy, input.conversationId, input.images)
+        },
+      )
+      clearDraft(draft, submitted)
+      if (draft.get().images === submitted.images) draft.set({ images: [] })
     } catch (failure) {
       if (key && draft.get().revision === submitted.revision)
         draft.set({ text: localStorage.getItem(key) ?? '' })
@@ -389,17 +332,15 @@ function ConversationComposer({
       if (event.defaultPrevented) return
     }
     if (event.key !== 'Enter' || event.shiftKey) return
+    // A touch keyboard's return key writes a new line; the send button sends.
+    if (touchKeyboard()) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : 'steer')
   }
 
   return (
-    <ComposerContext value={{ target, isolated: isolation, source, editor }}>
-      <div
-        data-composer-source={source}
-        data-composer-target={target}
-        className={cn(column(dock), 'pb-2')}
-      >
+    <ComposerContext value={{ draft: draftAccess(draft), editor }}>
+      <div data-composer-target="conversation" className={cn(column(dock), 'pb-2')}>
         <Inbox items={inbox} />
         <PromptInput
           onSubmit={(event) => {
@@ -415,11 +356,10 @@ function ConversationComposer({
           />
           <PromptInputTextarea
             ref={textarea}
-            autoFocus
+            autoFocus={!touchKeyboard()}
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
-            id={inputId ?? 'composer-input'}
-            aria-label={isNew ? 'Start a conversation' : undefined}
+            id="composer-input"
             aria-autocomplete={autocomplete ? 'list' : undefined}
             aria-haspopup={autocomplete ? 'listbox' : undefined}
             aria-controls={autocomplete?.listId}
@@ -441,20 +381,12 @@ function ConversationComposer({
             }}
             onKeyDown={onKeyDown}
             placeholder={
-              isNew
-                ? point?.root
-                  ? 'Start a new root: what is it about?'
-                  : point?.from === undefined
-                    ? 'Branch from the root: what do you want to do?'
-                    : 'What should the branch do?'
-                : busy
-                  ? 'Steer the run, or queue a follow-up…'
-                  : 'Ask Ultimate to change something…'
+              busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
             }
             value={text}
           />
-          <PromptInputFooter>
-            <PromptInputTools className="shrink-0">
+          <PromptInputFooter className="@container">
+            <PromptInputTools>
               <Slot name="composer.toolbar" variant="inline" />
             </PromptInputTools>
             <div className="flex min-w-0 items-center gap-2">
@@ -467,9 +399,9 @@ function ConversationComposer({
                 {error ??
                   blocked ??
                   (busy ? (
-                    <>
+                    <span className="pointer-coarse:hidden">
                       <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
-                    </>
+                    </span>
                   ) : null)}
               </span>
               {busy && (
@@ -484,18 +416,8 @@ function ConversationComposer({
               {(!busy || !empty) && (
                 <PromptInputSubmit
                   disabled={loading || empty || !!blocked || sending || reading}
-                  aria-label={
-                    loading ? 'Loading conversation' : isNew ? 'Start the conversation' : 'Send'
-                  }
-                  title={
-                    loading
-                      ? 'Loading conversation'
-                      : isNew
-                        ? 'Start (Enter)'
-                        : busy
-                          ? 'Steer (Enter)'
-                          : 'Send (Enter)'
-                  }
+                  aria-label={loading ? 'Loading conversation' : 'Send'}
+                  title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
                   className={loading ? 'bg-muted text-muted-foreground' : undefined}
                 >
                   {loading ? (

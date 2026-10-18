@@ -3,39 +3,33 @@ import {
   CircleCheckIcon,
   GitBranchIcon,
   GitForkIcon,
+  MessagesSquareIcon,
+  ScrollTextIcon,
   StickyNoteIcon,
-  TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { Kbd } from '@/components/ui/kbd'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
-  api,
-  useAction,
+  cn,
   defineWebExtension,
-  getConversation,
-  getState,
-  getUiState,
-  useComposer,
-  useDoc,
-  useStore,
+  formatTime,
+  formatTokens,
+  useConversation,
+  useDocOf,
+  useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
-import { ballSize, Crystal } from './crystal.tsx'
-import { getRoots, useRoots } from './roots.tsx'
-import { entryText, openStart, StartPage } from './start.tsx'
+import { talkToUltimate } from '../conversations/ultimate.tsx'
+import { Open } from '../workspaces/landing.tsx'
+import { useRoots } from './roots.tsx'
+import { column, Familiarize, Survey } from './survey.tsx'
 
-type BranchState = {
-  from: number
-  at: number
-  intent: string
-  status: 'briefing' | 'ready' | 'failed'
-  error?: string
-}
+type Tally = { tokens: number; since?: number }
+const tallyKind = 'lineage.tally'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -45,10 +39,11 @@ function userText(entry: EntryRecord) {
     : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
 }
 
-/** The source's marker of a branch started from it: a quiet divider that opens the branch. */
+/** A branch started from this conversation: in its tree's root a card with the prompt, elsewhere a quiet divider. */
 function Branched({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { branch, intent } = entry.data as { branch: number; intent: string }
+  if (entry.model) return <Started entry={entry} />
   return (
     <button
       className="flex w-full min-w-0 cursor-pointer items-center gap-3 font-mono text-[11px] text-muted-foreground/70 before:h-px before:flex-1 before:bg-border/70 after:h-px after:flex-1 after:bg-border/70 hover:text-foreground"
@@ -63,6 +58,133 @@ function Branched({ entry }: { entry: EntryRecord }) {
         <ConversationRef id={branch} title={intent} />
       </span>
     </button>
+  )
+}
+
+/** The tally's prompt node: which branch started, from where, with what prompt (three lines until opened). */
+function Started({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const { branch, at, intent, images, from, side } = entry.data as {
+    branch: number
+    at: number
+    intent: string
+    images?: number
+    from?: number
+    side?: number
+  }
+  const [open, setOpen] = useState(false)
+  const timestamp = entry.model?.[0]?.timestamp
+  return (
+    <section
+      className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
+      data-lineage-started={branch}
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <GitForkIcon className="size-3.5 shrink-0 text-brand" />
+        <span className="shrink-0 text-foreground">Started</span>
+        <button
+          className="flex min-w-0 cursor-pointer overflow-hidden text-foreground hover:underline"
+          onClick={() => switchConversation(branch)}
+          title={`Open #${branch}`}
+          type="button"
+        >
+          <ConversationRef id={branch} />
+        </button>
+        {from !== undefined && (
+          <button
+            className="shrink-0 cursor-pointer hover:text-foreground hover:underline"
+            onClick={() => switchConversation(from)}
+            title={`Open #${from}`}
+            type="button"
+          >
+            from #{from}/{at}
+          </button>
+        )}
+        {side !== undefined && (
+          <button
+            className="shrink-0 cursor-pointer hover:text-foreground hover:underline"
+            onClick={() => switchConversation(side)}
+            title={`Open side chat #${side}`}
+            type="button"
+          >
+            after side chat #{side}
+          </button>
+        )}
+        {timestamp !== undefined && (
+          <time
+            className="ml-auto shrink-0 tabular-nums"
+            dateTime={new Date(timestamp).toISOString()}
+            title={new Date(timestamp).toLocaleString()}
+          >
+            {formatTime(new Date(timestamp))}
+          </time>
+        )}
+      </header>
+      <button
+        aria-expanded={open}
+        className="block w-full min-w-0 cursor-pointer px-3 py-2.5 text-left text-[13px] leading-relaxed"
+        onClick={() => setOpen((current) => !current)}
+        title={open ? 'Show less' : 'Show the whole prompt'}
+        type="button"
+      >
+        <span className={cn('block break-words whitespace-pre-wrap', !open && 'line-clamp-3')}>
+          {intent}
+        </span>
+        {!!images && (
+          <span className="mt-1.5 block font-mono text-[11px] text-muted-foreground">
+            {images} image{images === 1 ? '' : 's'}
+          </span>
+        )}
+      </button>
+    </section>
+  )
+}
+
+type AbstractData = {
+  conversation: number
+  at: number
+  text: string
+  title?: string
+  anchor?: number
+}
+
+/**
+ * A conversation's abstract at its anchor, with the text of the newest carrier that replaced it; carriers show nothing.
+ * Once a landing froze it (or, in older tallies, a later abstract superseded it), it is not shown.
+ */
+function Abstract({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const transcript = useTranscript()
+  if ((entry.data as AbstractData).anchor !== undefined) return null
+  let latest = entry
+  for (const other of transcript)
+    if (other.id > latest.id && other.edits?.some((edit) => edit.target === entry.id))
+      latest = other
+  const omitted = latest.edits?.some((edit) => edit.target === entry.id && edit.action === 'omit')
+  if (omitted) return null
+  const { conversation, at, text, title } = latest.data as AbstractData
+  return (
+    <section
+      className="min-w-0 rounded-md border border-border bg-muted/20"
+      data-lineage-abstract={conversation}
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <ScrollTextIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">Abstract ·</span>
+        <button
+          className="flex min-w-0 cursor-pointer text-foreground hover:underline"
+          onClick={() => switchConversation(conversation)}
+          title={`Open #${conversation}`}
+          type="button"
+        >
+          <ConversationRef id={conversation} title={title} />
+        </button>
+        <Open className="ml-auto" entry={at} id={conversation} />
+      </header>
+      <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+        {text}
+      </p>
+    </section>
   )
 }
 
@@ -135,14 +257,15 @@ function NoteCard({
   )
 }
 
-/** A note another conversation (or the lander, a quiet `notify`, main's catch-up) left here. */
+/** A note another conversation (or the lander, a quiet `notify`, a catch-up on the tally and main) left here. */
 function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   const { from, text, source } = entry.data as {
     from?: number
     text: string
-    source?: 'lander' | 'finished' | 'main'
+    source?: 'lander' | 'finished' | 'main' | 'side'
   }
   if (source === 'lander') return core
+  if (source === 'side') return <SideNote entry={entry} />
   if (source === 'finished') return <Finished entry={entry} />
   if (source !== 'main') return <NoteCard id={from} label="Note from" note="received" text={text} />
   return (
@@ -152,7 +275,7 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
     >
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
         <GitBranchIcon className="size-3.5 text-brand" />
-        Main catch-up
+        Catch-up
       </header>
       <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
         <MessageResponse>{text}</MessageResponse>
@@ -177,10 +300,8 @@ function NoteCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
 }
 
 /** A branch's brief, which starts its context: collapsible like a compaction. */
-function Brief({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+function Brief({ entry, lineage }: { entry: EntryRecord; lineage: { from: number; at: number } }) {
   const { switchConversation } = useUltimate()
-  const lineage = (entry.data as { lineage?: { from: number; at: number } } | undefined)?.lineage
-  if (!lineage) return core
   const brief = userText(entry)
     .replace(/^<brief[^>]*>\n/, '')
     .replace(/\n<\/brief>$/, '')
@@ -217,383 +338,165 @@ function Brief({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   )
 }
 
-/** Under the composer of a branch: the brief being written, or why it failed; on the start page, its keys. */
-function BriefStatus() {
-  return useComposer().target === 'new' ? (
-    <span className="text-muted-foreground/70 pointer-coarse:hidden">
-      <Kbd>↵</Kbd> start · <Kbd>esc</Kbd> close
-    </span>
-  ) : (
-    <BriefLookup />
-  )
-}
-
-/**
- * Asks once whether the shown conversation is a branch still waiting for its brief, and only then subscribes to its
- * `lineage.branch` document: a first subscription reconnects the event stream, which every other conversation is
- * spared.
- */
-function BriefLookup() {
-  const { conversationId } = useUltimate()
-  const info = useAction<{ roots: number[]; root?: number; branch?: BranchState }>(
-    'lineage',
-    'info',
-    { id: conversationId ?? null },
-    { enabled: conversationId !== undefined },
-  )
-  const status = info.data?.branch?.status
-  return status && status !== 'ready' ? <BranchBrief /> : null
-}
-
-function BranchBrief() {
-  const { conversationId } = useUltimate()
-  const branch = useDoc<{ branch?: BranchState }>('lineage.branch')?.branch
-  const [retrying, setRetrying] = useState(false)
-  // While the brief is written, the overlay over the transcript says so.
-  if (branch?.status !== 'failed') return null
+/** A conversation's history distilled into the start of its tally: collapsible like a brief. */
+function Genesis({ entry }: { entry: EntryRecord }) {
+  const text = userText(entry)
+  const from = /^<tally from="#(\d+)\/(\d+)">/.exec(text)
+  const source = from ? Number(from[1]) : undefined
+  const genesis = text.replace(/^<tally[^>]*>\n/, '').replace(/\n<\/tally>$/, '')
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-error" data-lineage-status="failed">
-      <TriangleAlertIcon className="size-3 shrink-0" />
-      <span className="truncate" title={branch.error}>
-        Brief failed: {branch.error}
-      </span>
-      <button
-        className="shrink-0 cursor-pointer rounded px-1 text-foreground hover:bg-muted disabled:opacity-50"
-        disabled={retrying}
-        onClick={() => {
-          setRetrying(true)
-          void api
-            .action('lineage', 'retry', { id: conversationId ?? null })
-            .finally(() => setRetrying(false))
-        }}
-        type="button"
-      >
-        Retry
-      </button>
-    </span>
-  )
-}
-
-/**
- * `?briefing` holds the overlay up on the conversation shown first, to polish it; a click plays the finish, then it
- * starts over.
- */
-const rehearsal = new URLSearchParams(location.search).has('briefing')
-let rehearsed: number | undefined
-
-/** Branches started in this tab and not shown yet: their overlay shows at once, before `info` answers. */
-const started = new Set<number>()
-
-/** Over a branch while its brief is written: the history it inherited streaming into a crystal ball. */
-function BriefingOverlay() {
-  const { conversationId } = useUltimate()
-  if (conversationId === undefined) return null
-  if (rehearsal) {
-    rehearsed ??= conversationId
-    return conversationId === rehearsed ? <Rehearsal /> : null
-  }
-  return <BriefingOf id={conversationId} key={conversationId} />
-}
-
-/** Only while `id` is briefing: shown again later, a branch that finished meanwhile shows no overlay. */
-function BriefingOf({ id }: { id: number }) {
-  const [fresh] = useState(() => started.has(id))
-  useEffect(() => {
-    started.delete(id)
-  }, [id])
-  const info = useAction<{ roots: number[]; root?: number; branch?: BranchState }>(
-    'lineage',
-    'info',
-    { id },
-    { enabled: !fresh },
-  )
-  const branch = useDoc<{ branch?: BranchState }>('lineage.branch')?.branch
-  const [gone, setGone] = useState(false)
-  if (gone || (!fresh && info.data?.branch?.status !== 'briefing')) return null
-  return (
-    <Absorb
-      from={branch?.from}
-      onGone={() => setGone(true)}
-      outcome={branch && branch.status !== 'briefing' ? branch.status : undefined}
-    />
-  )
-}
-
-function Rehearsal() {
-  const [take, setTake] = useState(0)
-  const [outcome, setOutcome] = useState<'ready'>()
-  return (
-    <Absorb
-      from={1}
-      key={take}
-      onClick={() => setOutcome('ready')}
-      onGone={() => {
-        setOutcome(undefined)
-        setTake((current) => current + 1)
-      }}
-      outcome={outcome}
-    />
-  )
-}
-
-/** The overlay stays at least this long before the ball flows down, so a quick brief does not flash. */
-const minimum = 1500
-/** Where the ball flows to, in pixels above the bottom: into the composer. */
-const composer = 72
-
-/**
- * The overlay over the whole conversation, which is inert beneath it: the transcript dimmed behind the ball while dust
- * streams into it. Once the brief is ready the dimming lifts and the ball flows down into the composer, which then takes
- * focus; a failed brief fades at once, the composer saying why.
- */
-function Absorb({
-  from,
-  outcome,
-  onGone,
-  onClick,
-}: {
-  from?: number
-  outcome?: 'ready' | 'failed'
-  onGone: () => void
-  onClick?: () => void
-}) {
-  const theme = useStore((state) => state.ui.theme)
-  const { focusComposer } = useUltimate()
-  const root = useRef<HTMLDivElement>(null)
-  const dim = useRef<HTMLDivElement>(null)
-  const ball = useRef<HTMLDivElement>(null)
-  const glow = useRef<HTMLDivElement>(null)
-  const label = useRef<HTMLParagraphElement>(null)
-  const finish = useRef({ onGone, focusComposer })
-  finish.current = { onGone, focusComposer }
-  const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
-  const [shown] = useState(() => performance.now())
-  const [ended, setEnded] = useState<'ready' | 'failed'>()
-  const [landed, setLanded] = useState(false)
-  useEffect(() => {
-    if (!outcome) return undefined
-    const left = outcome === 'ready' && !still ? minimum - (performance.now() - shown) : 0
-    const timer = setTimeout(() => setEnded(outcome), Math.max(0, left))
-    return () => clearTimeout(timer)
-  }, [outcome, still, shown])
-  useLayoutEffect(() => {
-    const overlay = root.current!
-    // The conversation beneath takes no input, the composer included.
-    const beneath = [...overlay.parentElement!.children].filter(
-      (element): element is HTMLElement => element !== overlay && element instanceof HTMLElement,
-    )
-    for (const element of beneath) element.inert = true
-    // Each layer fades on its own: fading the overlay itself would leave the dimming nothing to blur.
-    const appear = [dim.current!, label.current!].map((layer) =>
-      layer.animate([{ opacity: 0 }, { opacity: 1 }], {
-        duration: still ? 0 : 350,
-        easing: 'ease-out',
-        fill: 'both',
-      }),
-    )
-    return () => {
-      for (const animation of appear) animation.cancel()
-      for (const element of beneath) element.inert = false
-    }
-  }, [still])
-  // Ready: the ball condenses and drops, and on landing a glow spreads along the composer and the dimming lifts.
-  // Failed, or with reduced motion: it all fades at once.
-  const finished = ended === 'failed' || (ended === 'ready' && still) || landed
-  useEffect(() => {
-    if (!finished) return undefined
-    const out = [{ opacity: 1 }, { opacity: 0 }]
-    const animations =
-      landed && !still
-        ? [
-            glow.current!.animate(
-              [
-                { opacity: 0, transform: 'translateX(-50%) scaleX(0.15)' },
-                { opacity: 1, transform: 'translateX(-50%) scaleX(1)', offset: 0.35 },
-                { opacity: 0, transform: 'translateX(-50%) scaleX(1.05)' },
-              ],
-              { duration: 900, easing: 'ease-out', fill: 'both' },
-            ),
-            dim.current!.animate(out, { duration: 450, easing: 'ease-in-out', fill: 'both' }),
-            ball.current!.animate(out, { delay: 300, duration: 600, fill: 'both' }),
-          ]
-        : [dim.current!, ball.current!, label.current!].map((layer) =>
-            layer.animate(out, { duration: still ? 150 : 300, fill: 'both' }),
-          )
-    void Promise.all(animations.map((animation) => animation.finished)).then(
-      () => {
-        finish.current.onGone()
-        finish.current.focusComposer()
-      },
-      // Cancelled as the overlay unmounts or a rehearsal starts over.
-      () => {},
-    )
-    return () => {
-      for (const animation of animations) animation.cancel()
-    }
-  }, [finished, landed, still])
-  useEffect(() => {
-    if (ended !== 'ready' || still) return undefined
-    const fade = label.current!.animate([{ opacity: 1 }, { opacity: 0 }], {
-      duration: 200,
-      fill: 'both',
-    })
-    return () => fade.cancel()
-  }, [ended, still])
-  return (
-    <div
-      aria-live="polite"
-      className="pointer-events-auto absolute inset-0 z-10 [container-type:size]"
-      data-lineage-status="briefing"
-      onClick={onClick}
-      ref={root}
-      role="status"
+    <Collapsible
+      className="group/genesis rounded-lg border border-brand/30 bg-brand/5"
+      data-lineage-genesis={entry.conversationId}
     >
-      <div className="absolute inset-0 bg-background/85 backdrop-blur-[3px]" ref={dim} />
+      <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
+        <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
+          <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/genesis:rotate-90" />
+          Tally starts here{from ? ` · distilled from #${from[1]}/${from[2]}` : ''}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {source !== undefined && source !== entry.conversationId
+            ? 'The project reading is distilled into the start of this tally.'
+            : 'The conversation before this point is distilled into the start of the tally. Earlier messages remain available above.'}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
+        {from && <Open id={Number(from[1])} entry={Number(from[2])} />}
+        <MessageResponse>{genesis}</MessageResponse>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+/**
+ * Lineage's resets: a tally's genesis, an old branch's brief, and the empty reset a new tally starts with, which shows
+ * nothing.
+ */
+function Reset({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const roots = useRoots()
+  const lineage = (
+    entry.data as { lineage?: { tally?: true; from?: number; at?: number } } | undefined
+  )?.lineage
+  if (lineage?.tally) return <Genesis entry={entry} />
+  if (lineage?.from !== undefined && lineage.at !== undefined)
+    return <Brief entry={entry} lineage={{ from: lineage.from, at: lineage.at }} />
+  if (!entry.model && entry.data === undefined && roots?.includes(entry.conversationId)) return null
+  return core
+}
+
+/** A root takes no input: an empty one starts by getting familiar with the project, any other shows its tally footer. */
+function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
+  const id = useConversation((conversation) => conversation.id)
+  const roots = useRoots()
+  if (id === undefined || !roots?.includes(id)) return core
+  return <TallyComposer dock={dock} id={id} key={id} />
+}
+
+/** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
+function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
+  const tally = useDocOf<Tally>(id, tallyKind)
+  const history = useConversation((conversation) =>
+    conversation.loading ? undefined : conversation.entries.length > 0,
+  )
+  if (tally === undefined || history === undefined) return null
+  if (tally?.since === undefined && !history) return <Familiarize dock={dock} id={id} />
+  return <TallyFooter dock={dock} id={id} tokens={tally?.tokens} />
+}
+
+/** In place of a tally's composer: what it is, its size, and the way to @ultimate, who keeps it. */
+function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?: boolean }) {
+  const actions = useUltimate()
+  return (
+    <div className={cn(column(dock), 'pb-3')}>
       <div
-        className="absolute left-1/2 h-24 w-[min(100%,48rem)] translate-y-1/2 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklab,var(--brand)_45%,transparent),transparent_70%)] opacity-0"
-        ref={glow}
-        style={{ bottom: composer }}
-      />
-      <div className="absolute inset-0" ref={ball}>
-        <Crystal
-          className="size-full"
-          color={theme === 'dark' ? '#bb9af4' : '#7b47bf'}
-          done={ended === 'ready'}
-          drop={composer}
-          onLand={() => setLanded(true)}
-          theme={theme}
-        />
-      </div>
-      <p
-        className="absolute inset-x-0 text-center font-mono text-[12px] text-muted-foreground"
-        ref={label}
-        style={{
-          top: `calc(${ballSize.top * 100}% + clamp(${ballSize.min}px, ${ballSize.fraction * 100}cqmin, ${ballSize.max}px) + 28px)`,
-        }}
+        className="rounded-lg border border-border bg-muted/20 px-3.5 py-2.5"
+        data-lineage-tally-footer={id}
       >
-        Writing the brief
-        {from !== undefined && (
-          <>
-            {' '}
-            from <ConversationRef id={from} />
-          </>
-        )}
-        …
-      </p>
+        <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          <ScrollTextIcon className="size-3.5 shrink-0 text-brand" />
+          <span className="shrink-0 text-foreground">Tally</span>
+          {tokens !== undefined && (
+            <span className="shrink-0" data-lineage-tokens={tokens}>
+              · {formatTokens(tokens)} tokens
+            </span>
+          )}
+          <button
+            className="ml-auto shrink-0 cursor-pointer text-brand hover:underline"
+            onClick={() => void talkToUltimate(actions)}
+            type="button"
+          >
+            Talk to @ultimate
+          </button>
+        </div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          The context every new branch starts from. @ultimate keeps it up to date.
+        </p>
+      </div>
     </div>
   )
 }
 
-function BranchAction({ entry }: { entry: EntryRecord }) {
-  return (
+/** What a side chat with a tally, from before tallies were read-only, left in it: its note, and the branch it ended in. */
+function SideNote({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const transcript = useTranscript()
+  const { from, text } = entry.data as { from: number; text: string }
+  const started = transcript.find(
+    (other) =>
+      other.id > entry.id &&
+      other.kind === 'lineage.branched' &&
+      (other.data as { side?: number }).side === from,
+  )
+  const branch = (started?.data as { branch: number } | undefined)?.branch
+  const open = (to: number) => (
     <button
-      aria-label="Branch from here"
-      title="Branch from here"
-      className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground"
-      onClick={() =>
-        openStart({ from: entry.conversationId, at: entry.id }, { excerpt: entryText(entry) })
-      }
+      className="flex min-w-0 cursor-pointer text-foreground hover:underline"
+      onClick={() => switchConversation(to)}
+      title={`Open #${to}`}
       type="button"
     >
-      <GitBranchIcon className="size-3" />
+      <ConversationRef id={to} />
     </button>
+  )
+  return (
+    <section
+      className="min-w-0 rounded-md border border-border bg-muted/20"
+      data-lineage-side-note={from}
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <MessagesSquareIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">Side chat ·</span>
+        {open(from)}
+        {branch !== undefined && (
+          <>
+            <span className="shrink-0">→</span>
+            {open(branch)}
+          </>
+        )}
+      </header>
+      <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+        {text}
+      </p>
+    </section>
   )
 }
 
-/** Keeps the roots streaming, for the synchronous `when` of "Make this a root". */
+/** Keeps the roots streaming for synchronous readers, such as the `when` of the agent's Compact command. */
 function Roots() {
   useRoots()
   return null
 }
 
-/** The shown conversation, when it is top-level (not a subagent or other owned conversation) and not a branch. */
-function topLevel() {
-  const { id } = getConversation()
-  const summary = getState().conversations.find((conversation) => conversation.id === id)
-  return id !== undefined && summary?.parentConversationId === undefined && !summary?.branchOf
-}
-
-/** Where a branch starts by default: the shown tree's root, else the most recently active root. */
-async function defaultRoot() {
-  const { id } = getConversation()
-  const info = await api.action<{ roots: number[]; root?: number }>(
-    'lineage',
-    'info',
-    id === undefined ? null : { id },
-  )
-  if (info.root !== undefined) return info.root
-  const { conversations } = getState()
-  const inputAt = (root: number) =>
-    conversations.find((conversation) => conversation.id === root)?.inputAt ?? 0
-  return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
-}
-
 export default defineWebExtension({
-  start: async ({ root, ...draft }) => {
-    // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
-    const isolated =
-      draft.isolated ??
-      (getUiState('ext.conversations.creationType') !== 'shared' &&
-        getState().system?.extensions.some((extension) => extension.name === 'workspaces') ===
-          true &&
-        !(await api.action<{ reason?: string }>('workspaces', 'isolation', {})).reason)
-    if (root) {
-      const { from: _from, at: _at, ...input } = draft
-      return api.action<{ id: number }>('lineage', 'newRoot', { ...input, isolated })
-    }
-    const from = draft.from ?? (await defaultRoot())
-    if (from === undefined) throw new Error('There is no root to branch from')
-    const branch = await api.action<{ id: number }>('lineage', 'branch', {
-      ...draft,
-      from,
-      isolated,
-    })
-    started.add(branch.id)
-    return branch
-  },
   tools: { note: NoteCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,
     'lineage.finished': Finished,
-    'pi.reset': Brief,
+    'lineage.abstract': Abstract,
+    'lineage.survey': ({ entry }) => <Survey entry={entry} text={userText(entry)} />,
+    'pi.reset': Reset,
   },
-  slots: {
-    'composer.status': [BriefStatus],
-    'conversation.overlay': [BriefingOverlay, StartPage],
-    overlay: [Roots],
-  },
-  messageActions: [BranchAction],
-  commands: [
-    {
-      id: 'lineage.branch-at',
-      title: 'Branch from here',
-      group: 'Conversations',
-      when: (context) => context.entryId !== undefined,
-      run: (context) => {
-        if (context.conversationId !== undefined && context.entryId !== undefined)
-          openStart({ from: context.conversationId, at: context.entryId })
-      },
-    },
-    {
-      id: 'lineage.branch',
-      title: 'Branch…',
-      group: 'Conversations',
-      when: () => getConversation().id !== undefined,
-      run: () => {
-        const { id } = getConversation()
-        if (id !== undefined) openStart({ from: id })
-      },
-    },
-    {
-      id: 'lineage.add-root',
-      title: 'Make this a root',
-      group: 'Conversations',
-      when: () => topLevel() && getRoots()?.includes(getConversation().id!) === false,
-      run: async () => {
-        const { id } = getConversation()
-        if (id !== undefined) await api.action('lineage', 'root', { id })
-      },
-    },
-  ],
+  composer: RootComposer,
+  slots: { overlay: [Roots] },
 })

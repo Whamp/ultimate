@@ -3,12 +3,23 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { Context } from '@earendil-works/chord'
 import { AgentDoc, defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryDraft, Tx } from '@earendil-works/pi-durable'
+import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
+import type {
+  ConversationId,
+  EntryDraft,
+  EntryId,
+  EntryRecord,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
+import type { OpenAbstract } from './server.ts'
 
-/** The target tip a conversation last saw. A branch gets its own baseline, not its source's. */
-export const Seen = defineDoc<{ main?: string; at?: number }>({
+/**
+ * What a conversation last saw: the target tip (`main`, at time `at`) and the last entry of its tree's tally it
+ * accounted for (`tally`). A branch gets its own baseline, not its source's.
+ */
+export const Seen = defineDoc<{ main?: string; at?: number; tally?: number }>({
   kind: 'lineage.seen',
   version: 1,
   scope: 'conversation',
@@ -182,36 +193,262 @@ async function catchupText(
     ...(behind
       ? [`Your workspace is ${behind} commits behind ${main.target}; merge it before continuing.`]
       : []),
-    'Check whether any of this already covers or changes what you are about to do.',
   ].join('\n\n')
 }
 
-// Pi upstream: @earendil-works/pi-durable@1.2.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
+/** The first input `id` placed itself; its own entries all follow the entry it was forked at. */
+async function firstInput(tx: Tx, id: ConversationId, forkedAt = 0) {
+  let cursor
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: id, minEntryId: (forkedAt + 1) as EntryId, order: 'ascending' },
+      100,
+      cursor,
+    )
+    const first = page.items.find((entry) => entry.conversationId === id && entry.input)
+    if (first) return first.id
+    cursor = page.next
+  } while (cursor)
+  return undefined
+}
+
+/** A tally a top-level conversation catches up on: its tree root, once that root is a tally. */
+export type Tree = { root: ConversationId; since: number; abstracts: Record<string, OpenAbstract> }
+
+/** Tokens the tally part of a catch-up may take. */
+export const TALLY_BUDGET = 6000
+
+/** What one conversation of the tree did since the baseline, as model-visible in the tally now. */
+type Activity = {
+  id: number
+  last: number
+  title?: string
+  feature?: string
+  prompt?: string
+  abstract?: { at: number; text: string }
+  landings: {
+    sha: string
+    target: string
+    at: number
+    divergence: string
+    state?: { at: number; text: string }
+  }[]
+  notes: string[]
+}
+
+/** A block's tokens with the blank line that separates it from the next. */
+const cost = (text: string) => estimateTextTokens(`${text}\n\n`)
+const oneLine = (text: string) => text.replace(/\s*\n\s*/g, ' ').trim()
+
+function full(activity: Activity) {
+  const { id, title, feature, prompt, abstract, landings, notes } = activity
+  if (!abstract && !landings.length && !notes.length) return `**#${id}** started: ${prompt}`
+  // Without a liquid abstract, the state its newest landing froze is its latest.
+  const frozen = abstract ? undefined : landings.findLast((landing) => landing.state)?.state
+  const state = abstract ?? frozen
+  const items = [
+    ...(state
+      ? state.text
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => (/^[-*] /.test(line) ? line : `- ${line}`))
+      : prompt
+        ? [`- Started: ${prompt}`]
+        : []),
+    ...landings.map(
+      (landing) =>
+        `- Landed \`${landing.sha.slice(0, 7)}\` on ${landing.target} (#${id}/${landing.at}). Diverged: ${oneLine(landing.divergence)}`,
+    ),
+    ...notes.map((note) => `- Note: ${oneLine(note)}`),
+  ]
+  return [
+    `**#${id}${title ? ` ${title}` : ''}**${feature ? ` · ${feature}` : ''}${abstract ? ` — abstract as of #${id}/${abstract.at}:` : frozen ? ` — state at landing, as of #${id}/${frozen.at}:` : ':'}`,
+    ...items,
+  ].join('\n')
+}
+
+const collapsed = ({ id, title, feature, landings }: Activity) =>
+  `- #${id}${title ? ` ${title}` : ''}${feature ? ` · ${feature}` : ''} — ${landings.length ? `landed \`${landings.at(-1)!.sha.slice(0, 7)}\`` : 'in progress'}`
+
+/**
+ * What the tree's tally learned after `baseline`, for conversation `id`: each other conversation's latest abstract (or
+ * its prompt while it has none), landings and notes, and a distillation of the tally itself. The newest stay in full;
+ * when they exceed the budget the oldest collapse to one line each. Deterministic: it runs inside input placement.
+ */
+export async function tallyText(
+  id: ConversationId,
+  tree: Tree,
+  baseline: number,
+  tx: Tx,
+  budget = TALLY_BUDGET,
+) {
+  const { root } = tree
+  const marker = await tx.latestHeadMarker(root)
+  const entries: EntryRecord[] = []
+  let cursor
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: root, minEntryId: (baseline + 1) as EntryId, order: 'ascending' },
+      100,
+      cursor,
+    )
+    entries.push(...page.items)
+    cursor = page.next
+  } while (cursor)
+  const tip = entries.at(-1)?.id
+  // The prompts of the conversations it was forked from are in its context already, as their first inputs, when every
+  // fork on the way up was made at or after that input.
+  const sources = new Set<number>()
+  let cut = Number.POSITIVE_INFINITY
+  for (let record = await tx.conversation(id); record?.parent;) {
+    cut = Math.min(cut, record.parent.at)
+    const up = record.parent.conversationId
+    if (up === root) break
+    record = await tx.conversation(up)
+    const first = await firstInput(tx, up, record?.parent?.at)
+    if (first !== undefined && first <= cut) sources.add(up)
+  }
+  const activities = new Map<number, Activity>()
+  const of = (conversation: number, entry: EntryRecord) => {
+    let activity = activities.get(conversation)
+    if (!activity)
+      activities.set(
+        conversation,
+        (activity = { id: conversation, last: 0, landings: [], notes: [] }),
+      )
+    activity.last = entry.id
+    return activity
+  }
+  // Entries a compaction or genesis replaced are no longer in the tally; its distillation stands for them.
+  const visible = entries.filter(
+    (entry) => (!marker || entry.id >= marker.head) && entry.id !== marker?.id,
+  )
+  for (const entry of visible) {
+    const data = (entry.data ?? {}) as Record<string, unknown>
+    if (entry.kind === 'lineage.abstract') {
+      // An open abstract's anchor or a carrier updating it: the abstract as it reads now. A frozen one is the landing's.
+      const conversation = data.conversation as number
+      const open = tree.abstracts[String(conversation)] as OpenAbstract | undefined
+      if (conversation === id || open?.anchor !== ((data.anchor as number | undefined) ?? entry.id))
+        continue
+      const activity = of(conversation, entry)
+      activity.abstract = { at: open.at, text: open.text }
+      if (open.title) activity.title = open.title
+      if (open.feature) activity.feature = open.feature
+    } else if (!entry.model) continue
+    else if (entry.kind === 'lineage.branched') {
+      const conversation = data.branch as number
+      if (conversation === id || sources.has(conversation)) continue
+      of(conversation, entry).prompt = oneLine((data.intent as string).split('\n')[0])
+    } else if (entry.kind === 'lineage.note' && typeof data.from === 'number' && data.from !== id) {
+      const activity = of(data.from, entry)
+      if (data.source === 'lander') {
+        const state = data.abstract as Omit<OpenAbstract, 'anchor'> | undefined
+        activity.landings.push({
+          sha: data.sha as string,
+          target: data.target as string,
+          at: data.at as number,
+          divergence: (data.divergence as string | undefined) ?? 'not stated',
+          ...(state ? { state: { at: state.at, text: state.text } } : {}),
+        })
+        activity.title ??= state?.title ?? (data.title as string | undefined)
+        activity.feature ??= state?.feature ?? (data.feature as string | undefined)
+      } else activity.notes.push(data.text as string)
+    }
+  }
+  for (const activity of activities.values()) activity.title ??= activity.prompt
+  const newest = [...activities.values()].toSorted((a, b) => b.last - a.last)
+  const blocks = newest.map((activity) => ({ full: full(activity), line: collapsed(activity) }))
+  const distilled =
+    marker && marker.id > baseline && marker.model
+      ? marker.model.flatMap((message) =>
+          message.role !== 'user'
+            ? []
+            : typeof message.content === 'string'
+              ? [message.content]
+              : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+        )
+      : undefined
+  if (distilled)
+    blocks.push({
+      full: `**#${root}'s tally was distilled** (#${root}/${marker!.id}):\n\n${distilled
+        .join('\n')
+        .replace(/^<\/?[a-z][^>\n]*>$/gm, '')
+        .trim()}`,
+      line: `- #${root}'s tally was distilled at #${root}/${marker!.id}`,
+    })
+  if (!blocks.length) return { tip }
+  const header = `Meanwhile in #${root}'s tree:`
+  const pointer = `Earlier, collapsed (read them in full with codemode \`ultimate.entries(${root})\`):`
+  let used = cost(header) + cost(`- and ${blocks.length} more`)
+  const kept: string[] = []
+  const lines: string[] = []
+  let dropped = 0
+  for (const block of blocks) {
+    if (!lines.length && !dropped && used + cost(block.full) <= budget) {
+      kept.unshift(block.full)
+      used += cost(block.full)
+      continue
+    }
+    if (!lines.length && !dropped) used += cost(pointer)
+    if (!dropped && used + cost(block.line) <= budget) {
+      lines.unshift(block.line)
+      used += cost(block.line)
+    } else dropped++
+  }
+  return {
+    tip,
+    text: [
+      header,
+      ...(lines.length || dropped
+        ? [[pointer, ...(dropped ? [`- and ${dropped} more`] : []), ...lines].join('\n')]
+        : []),
+      ...kept,
+    ].join('\n\n'),
+  }
+}
+
+// Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
 /** The note, baseline and first input commit together, before any request can see them. */
 export async function catchup(
   host: ExtensionHost,
   _input: EntryDraft,
   api: { conversationId: ConversationId; tx: Tx },
   ctx: Context,
+  treeOf: (tx: Tx, id: ConversationId) => Promise<Tree | undefined>,
 ) {
   const { tx, conversationId } = api
   const record = await tx.conversation(conversationId)
   if (!record || record.owner) return undefined
+  const tree = await treeOf(tx, conversationId)
   const main = await mainOf(host, conversationId, ctx, tx)
-  if (!main) return undefined
   const seen = await tx.doc(Seen, conversationId)
-  const text =
-    seen.main && seen.main !== main.sha
+  // Conversations from before the tally was tracked catch up from its start.
+  const meanwhile = tree
+    ? await tallyText(conversationId, tree, seen.tally ?? tree.since, tx)
+    : undefined
+  const commits =
+    main && seen.main && seen.main !== main.sha
       ? await catchupText(host, conversationId, main, { main: seen.main, at: seen.at }, tx)
       : undefined
-  seen.main = main.sha
-  if (!seen.at || text) seen.at = Date.now()
-  if (!text) return undefined
+  if (meanwhile?.tip !== undefined) seen.tally = meanwhile.tip
+  if (main) {
+    seen.main = main.sha
+    if (!seen.at || commits) seen.at = Date.now()
+  }
+  if (!meanwhile?.text && !commits) return undefined
+  const text = [
+    ...(meanwhile?.text ? [meanwhile.text] : []),
+    ...(commits ? [commits] : []),
+    'Check whether any of this already covers or changes what you are about to do.',
+  ].join('\n\n')
   return {
     entries: [
       {
         kind: 'lineage.note',
-        data: { source: 'main', text },
+        // Where this catch-up left the tally: a fork of this conversation inherits that position.
+        data: { source: 'main', text, ...(seen.tally === undefined ? {} : { tally: seen.tally }) },
         model: [{ role: 'user' as const, content: text, timestamp: Date.now() }],
       },
     ],

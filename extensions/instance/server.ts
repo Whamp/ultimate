@@ -1,7 +1,18 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, stat } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve as resolvePath } from 'node:path'
+import { basename, join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
@@ -9,13 +20,50 @@ import { defineExtension, defineTool, section } from '@earendil-works/pi-durable
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/server.ts'
+import type { TailscaleService } from '../tailscale/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
+import { cleanPreview, sweepPreviews } from './cleanup.ts'
+
+/** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud sync. */
+export function previewEnv(
+  parent: NodeJS.ProcessEnv,
+  options: { home: string; project: string; userHome: string; faux?: boolean; ownerPid: number },
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(
+      Object.entries(parent).filter(
+        ([key]) =>
+          ![
+            'ULTIMATE_SUPERVISED',
+            'ULTIMATE_PUBLIC_URL',
+            'ULTIMATE_GENERATION',
+            'ULTIMATE_PREVIOUS_BUILD',
+            'ULTIMATE_HOME',
+            'ULTIMATE_PORT',
+            'ULTIMATE_FAUX',
+            'ULTIMATE_CLOUD_URL',
+            'ULTIMATE_CLOUD_TOKEN',
+            'ULTIMATE_CLOUD_MACHINE',
+          ].includes(key),
+      ),
+    ),
+    ULTIMATE_HOME: options.home,
+    ULTIMATE_PROJECT: options.project,
+    HOME: options.userHome,
+    ULTIMATE_PORT: '0',
+    ULTIMATE_NO_OPEN: '1',
+    ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
+  }
+  if (options.faux) env.ULTIMATE_FAUX = '1'
+  return env
+}
 
 interface Instance {
   id: string
   url: string
   home: string
   pid: number
+  temporary: boolean
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
   conversationId: number
   faux: boolean
@@ -32,15 +80,51 @@ const info = ({ id, url, home, pid, conversationId, faux }: Instance) => ({
   faux,
 })
 const live = (item: Instance) => item.child.exitCode === null && item.child.signalCode === null
-/** The instances this process runs, shared by the tool and the actions; shutdown stops them all. */
-function running(host: Pick<ExtensionHost, 'resource' | 'onClose'>) {
+/** The instances this process runs, shared by the tool and the actions; shutdown stops them all and remembers them. */
+function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home'>) {
   const instances: Map<string, Instance> = host.resource('instance', () => {
     host.onClose(async () => {
+      const served = [...instances.values()].filter((item) => item.url)
       await Promise.all([...instances.keys()].map((id) => stop(instances, id)))
+      for (const item of served) remember(host, item)
     })
     return new Map<string, Instance>()
   })
   return instances
+}
+/** What `list` shows of a preview. */
+const listed = ({
+  id,
+  url,
+  conversationId,
+  faux,
+}: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>) => ({ id, url, conversationId, faux })
+type Listed = ReturnType<typeof listed>
+const portOf = (url: string) => new URL(url).port
+/**
+ * Previews that no longer run, by port, so that links to them can say so: the last 50, kept in the home across
+ * restarts, since a restart stops every preview.
+ */
+export const stopped = (host: Pick<ExtensionHost, 'resource' | 'home'>) =>
+  host.resource('instance.stopped', () => {
+    const byPort = new Map<string, Listed>()
+    try {
+      const saved = JSON.parse(readFileSync(join(host.home, 'previews.json'), 'utf8')) as Listed[]
+      for (const item of saved) byPort.set(portOf(item.url), item)
+    } catch {
+      // No previews stopped in this home yet, or an unreadable file: links to earlier ones stay ordinary links.
+    }
+    return byPort
+  })
+export function remember(
+  host: Pick<ExtensionHost, 'resource' | 'home'>,
+  item: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>,
+) {
+  const byPort = stopped(host)
+  byPort.delete(portOf(item.url))
+  byPort.set(portOf(item.url), listed(item))
+  for (const port of [...byPort.keys()].slice(0, -50)) byPort.delete(port)
+  writeFileSync(join(host.home, 'previews.json'), JSON.stringify([...byPort.values()]))
 }
 async function stop(instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
@@ -55,15 +139,58 @@ async function stop(instances: Map<string, Instance>, id: string) {
       clearTimeout(timer)
     }
   }
+  if (instance.temporary) {
+    await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+    })
+    await cleanPreview(instance.home)
+  }
   instances.delete(id)
 }
 
+/**
+ * Where the tailnet reaches each preview, by pid. A preview's own `tailscale` extension records its HTTPS port in
+ * the user's registry under an owner token that starts with its pid; the host's tailscale status knows the DNS name.
+ */
+async function tailnet(host: Pick<ExtensionHost, 'use' | 'userHome'>) {
+  const published = host.use<TailscaleService>('tailscale')?.status().url
+  if (!published) return new Map<number, string>()
+  let registry: { ports?: Record<string, { port: number; owner: string }> }
+  try {
+    registry = JSON.parse(await readFile(join(host.userHome, '.ultimate/tailscale.json'), 'utf8'))
+  } catch {
+    // Missing or unreadable, the registry names no addresses; the previews themselves still list.
+    return new Map<number, string>()
+  }
+  const { hostname } = new URL(published)
+  return new Map(
+    Object.values(registry.ports ?? {}).map(({ port, owner }) => [
+      Number(owner.split(':')[0]),
+      `https://${hostname}:${port}`,
+    ]),
+  )
+}
+
 export const actions: Record<string, ExtensionAction> = {
-  /** The running instances that serve their UI, for the title bar's switcher. */
-  list: (_args, { host }) =>
-    [...running(host).values()]
-      .filter((item) => item.url && live(item))
-      .map(({ id, url, conversationId, faux }) => ({ id, url, conversationId, faux })),
+  /**
+   * The instances that served their UI, running or not since, for the title bar's switcher and preview links. A start
+   * that failed is not among them.
+   */
+  list: async (_args, { host }) => {
+    const addresses = await tailnet(host)
+    return [
+      ...[...running(host).values()]
+        .filter((item) => item.url)
+        .map((item) => ({
+          ...listed(item),
+          running: live(item),
+          ...(live(item) && addresses.has(item.pid) && { tailnet: addresses.get(item.pid) }),
+        })),
+      ...[...stopped(host).values()]
+        .filter((item) => ![...running(host).values()].some((run) => run.url === item.url))
+        .map((item) => ({ ...item, running: false })),
+    ]
+  },
 }
 
 export default function instanceExtension(
@@ -72,6 +199,8 @@ export default function instanceExtension(
     | 'use'
     | 'resource'
     | 'onClose'
+    | 'onOpen'
+    | 'notice'
     | 'home'
     | 'ultimateRoot'
     | 'projectRoot'
@@ -87,6 +216,11 @@ export default function instanceExtension(
   const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const ownSource = host.projectRoot === host.ultimateRoot
+  host.onOpen(async () => {
+    void sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
+      host.notice(`Preview sweep failed: ${String(error)}`)
+    })
+  })
   return defineExtension({
     name: 'instance',
     sections: [
@@ -112,12 +246,15 @@ export default function instanceExtension(
         }),
         async execute(args, api, context) {
           let reserved = false
+          let pendingHome: string | undefined
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
             if (args.action === 'list') result = [...instances.values()].filter(live).map(info)
             else if (args.action === 'stop') {
+              const item = instances.get(args.id ?? '')
               await stop(instances, args.id ?? '')
+              if (item?.url) remember(host, item)
               result = { stopped: args.id }
             } else if (args.action === 'logs') {
               const item = instances.get(args.id ?? '')
@@ -165,35 +302,37 @@ export default function instanceExtension(
               if (args.home) {
                 await mkdir(resolvePath(args.home), { recursive: true })
                 home = await realpath(resolvePath(args.home))
-              } else home = await mkdtemp(join(tmpdir(), 'ultimate-instance-'))
+              } else {
+                // Publish only after the parent's lease exists, so another host's sweep cannot race startup.
+                const staging = await mkdtemp(join(tmpdir(), '.ultimate-instance-'))
+                home = join(tmpdir(), basename(staging).slice(1))
+                try {
+                  await writeFile(
+                    join(staging, 'ultimate.lock'),
+                    JSON.stringify({ pid: process.pid }),
+                  )
+                  await writeFile(join(staging, 'project.json'), JSON.stringify({ root: project }))
+                  await rename(staging, home)
+                  pendingHome = home
+                } catch (error) {
+                  await rm(staging, { recursive: true, force: true })
+                  throw error
+                }
+              }
               if (home === (await realpath(host.home)))
                 throw new Error('A test instance cannot share the running server home')
               if ([...instances.values()].some((item) => item.home === home && live(item)))
                 throw new Error('Home is already owned by an instance')
               context.abortSignal?.throwIfAborted()
-              const env: NodeJS.ProcessEnv = {
-                ...Object.fromEntries(
-                  Object.entries(process.env).filter(
-                    ([key]) =>
-                      ![
-                        'ULTIMATE_SUPERVISED',
-                        'ULTIMATE_PUBLIC_URL',
-                        'ULTIMATE_GENERATION',
-                        'ULTIMATE_PREVIOUS_BUILD',
-                        'ULTIMATE_HOME',
-                        'ULTIMATE_PORT',
-                        'ULTIMATE_FAUX',
-                      ].includes(key),
-                  ),
-                ),
-                ULTIMATE_HOME: home,
-                ULTIMATE_PROJECT: project,
-                HOME: host.userHome,
-                ULTIMATE_PORT: '0',
-                ULTIMATE_NO_OPEN: '1',
-                ULTIMATE_INSTANCE_OWNER: String(process.pid),
-              }
-              if (args.faux) env.ULTIMATE_FAUX = '1'
+              // Explicit homes are retained even when their name matches the automatic sweep's prefix.
+              if (args.home) await writeFile(join(home, 'instance-preserve'), '')
+              const env = previewEnv(process.env, {
+                home,
+                project,
+                userHome: host.userHome,
+                faux: args.faux,
+                ownerPid: process.pid,
+              })
               const child = spawn(process.execPath, ['server/main.ts'], {
                 cwd,
                 env,
@@ -205,12 +344,14 @@ export default function instanceExtension(
                 url: '',
                 home,
                 pid: child.pid ?? 0,
+                temporary: !args.home,
                 conversationId,
                 faux: args.faux === true,
                 child,
                 output: '',
               }
               instances.set(id, item)
+              pendingHome = undefined
               starts.pending--
               reserved = false
               const append = (chunk: Buffer) => {
@@ -280,6 +421,10 @@ export default function instanceExtension(
             }
             return { output: [{ type: 'text', text: JSON.stringify(result) }] }
           } catch (error) {
+            if (pendingHome) {
+              await unlink(join(pendingHome, 'ultimate.lock'))
+              await cleanPreview(pendingHome)
+            }
             return { isError: true, output: [{ type: 'text', text: String(error) }] }
           } finally {
             if (reserved) starts.pending--

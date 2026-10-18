@@ -1,16 +1,12 @@
 import './annotation.css'
 import { MessageSquareIcon } from 'lucide-react'
-import { defineWebExtension, useComposer } from '@/sdk'
+import { defineWebExtension } from '@/sdk'
 import { AnnotationAttachments, AnnotationBatchEntry } from './annotation-cards.tsx'
-import { annotationComposer } from './annotation-client.tsx'
+import { annotationComposerSubmission } from './annotation-client.tsx'
 import { AnnotationOverlay } from './annotation-overlay.tsx'
 import { AnnotatableEntry } from './annotation-sources.tsx'
 
 function AnnotationHelp() {
-  const composer = useComposer()
-  if (composer.target !== 'conversation') {
-    return null
-  }
   return (
     <span
       data-annotation-ui
@@ -25,7 +21,7 @@ function AnnotationHelp() {
 
 /** Project-local prototype; entry renderers wrap core, while only this extension's batch entry gets its own card. */
 export default defineWebExtension({
-  composer: annotationComposer,
+  composerSubmission: annotationComposerSubmission,
   entries: {
     'pi.assistant': AnnotatableEntry,
     'pi.tool-result': AnnotatableEntry,

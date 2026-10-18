@@ -15,13 +15,28 @@ existing extension and change it:
 | Tool renderers (diffs, terminals, images)         | `coding-tools`, `browser`, `instance`               |
 | A right-panel tab                                 | `info` (key/value sections), `tasks`, `subagents`   |
 | Toolbar buttons, dialogs, commands, a popover     | `models`                                            |
-| A header badge, an entry renderer that wraps core | `self`                                              |
+| A status-line action, an entry renderer over core | `self`                                              |
 | An extension document in the UI (`useDoc`)        | `plan`, `codemode` (renderers), `models` (`useDoc`) |
 | A renderer for your document (Documents tab)      | `plan` (see [Documents](#documents))                |
 | A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
 An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
+
+A `composer` renderer wraps the shown conversation's composer; keep this upstream contract separate from
+`composerSubmission: { subscribe, pending, submit }`. The latter contributes pending content to normal Send,
+including annotation-only sends. `pending(conversationId)` is synchronous; `submit(input)` must freeze its pending
+state before awaiting and resolve only after durable acceptance. Multiple pending transports block Send instead of
+silently dropping one. Use `composer.attachments` for pending cards above the textarea. `useComposerEditor()` gives
+inline controls selection, replacement, key handling and listbox ARIA registration without DOM listeners.
+
+An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
+narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
+discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
+as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries and
+`useComposer()` for draft access.
+Lineage uses this to show a root's read-only tally footer, or an empty root's Start here card, instead of a composer.
+`switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
 ## Where extensions live
 
@@ -53,7 +68,7 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
 other projects are not checked by anything, so try them in the browser. Agents live in the same three places
-(`agents/`); skills come from clone `skills/`, then Pi (`~/.pi/agent/skills/`, the project's `.pi/skills/`), then `~/.ultimate/skills/`, then
+(`agents/`); skills come from clone `skills/`, then the project's `.pi/skills/`, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, later winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
 
@@ -181,95 +196,37 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, composer, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
-
-A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
-(or `root: true`) and configuration, returning `Promise<{ id: number }>`. The last starter in discovery order wins; without one, the
-new composer is blocked. The extension owns creation policy; `getUiState(key)` reads pending local UI choices too.
 
 ### Slots
 
 Components mounted in named places of the shell, on every surface that renders the primitive holding them, and in the
 title bar the host shows above every surface.
 
-| Slot                   | Where                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                         |
-| `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                |
-| `titlebar.right`       | Title bar, right, before the palette button                                               |
-| `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                            |
-| `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                          |
-| `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                              |
-| `composer.toolbar`     | Left of the composer's footer, beside the send button (`<Conversation />`)                |
-| `composer.attachments` | Inside the composer form, above image previews and the textarea                           |
-| `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)  |
-| `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0` |
-| `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects          |
+| Slot                   | Where                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                              |
+| `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                     |
+| `titlebar.right`       | Title bar, right, before the palette button                                                    |
+| `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                                 |
+| `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                               |
+| `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                                   |
+| `composer.toolbar`     | Left of the composer's footer; a size container, condense with `@max-md:` (`<Conversation />`) |
+| `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)       |
+| `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`      |
+| `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects               |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
-`useComposer()` returns `{ target: 'conversation' | 'new', source? }` inside composer slots; `source` is the
-conversation a new branch starts from. The Agent and dock
-composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
-(with an optional `inputId` for focus control)
-uses the same input, toolbar and status slots to start a branch or a new root through the conversation starter. Toolbar contributions can edit pending
-choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
-choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
-sidebar New. Without a choice a branch shows and keeps its source's model and thinking, a new root the project
-default's (models `defaultConfiguration`); choices are passed to lineage and remembered for the next one. Images disable send until the branch starts.
-An optional `isolated` prop forces that creation mode without changing the saved preference; `useComposer().isolated`
-lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
+`useComposer()` returns `{ draft? }` inside composer slots and the shown conversation's composer renderers. `draft.read()` returns a text-only `{ text, revision }` snapshot;
+`draft.clear(snapshot)` clears it only if no edits were made since that snapshot (and preserves newer stored text).
+Use it after a successful submission; images are not included or cleared. The draft shares the normal composer's
+storage and submission-clear path, not separate state. `draft` is absent outside a composer. The Agent and dock
+composers target the shown conversation. Contextual commands can receive an `entryId` alongside `conversationId`
 through `useCommands()`; a message-action component can pass its entry's id to a command.
-
-### Composer editing
-
-`useComposerEditor()` returns the owning editor inside composer slots, or `null` outside a composer. It exposes the visible `text`, UTF-16 `selection: { start, end }` (exclusive end), `focused`, `composing` and `readOnly` state. `replace(range, text)` edits only that range, persists through the normal draft store, restores focus and puts the caret after the inserted text. It never sends or changes attachments. Invalid ranges and read-only editors are ignored.
-
-`registerKeyHandler(handler)` returns a cleanup function. A mounted suggestion control can register through a React 19 callback ref and return that cleanup:
-
-```tsx
-<div
-  ref={() =>
-    editor.registerKeyHandler((event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        close()
-      }
-    })
-  }
-/>
-```
-
-A listbox that keeps focus in the editor also calls `registerAutocomplete({ listId, activeOptionId? })`. The core renders `aria-autocomplete="list"`, `aria-haspopup="listbox"`, `aria-controls` and `aria-activedescendant` on the native textarea. Supply the actual listbox ID and the selected option's ID; omit `activeOptionId` for an empty list. Register from a **memoized** listbox callback ref so normal editor renders do not replace the registration; update it when either ID changes and return its cleanup. Cleanup removes only that registration, so an older control cannot clear a newer one. Unmounting the listbox (dismissal, blur, loading or error) removes its ARIA association. The textarea remains a multiline textbox, not a single-line combobox, and keyboard focus does not move to the options.
-
-Handlers run before the composer's Enter handling. `preventDefault()` claims a key before Send and global shortcuts (which run in the bubble phase so controls can intentionally prevent them). Composition keys are not dispatched to editor controls; extensions must also respect modifiers. Register only while the control is active, and preserve editor focus on mouse selection. For a menu above the input, contribute a zero-height relative wrapper with an absolute `bottom-full` child to `composer.attachments`; keep it bounded to the composer width. Do not scrape the DOM, attach textarea listeners, or use a submission transport to hide an edit. The built-in `skill-picker` is an example.
-
-### Composer submissions
-
-A `composer` contribution adds pending content to the normal conversation Send. Its contract is
-`ComposerSubmissionContribution` from `@/sdk`:
-
-```ts
-interface ComposerSubmissionContribution {
-  subscribe(listener: () => void): () => void
-  pending(conversationId: number): boolean
-  submit(input: ComposerSubmissionInput): Promise<void>
-}
-```
-
-`input` contains `{ conversationId, text, images, whenBusy? }`; `whenBusy` is `steer` or `followUp` while the agent
-works. Subscribe must notify whenever pending content changes and return a disposer. Pending content enables Send
-even without text or images. The new-conversation composer does not use these transports.
-
-On explicit Send, core invokes the sole pending transport instead of `api.submit`. The extension must freeze its
-pending batch synchronously before its first await, deliver the general text and images along with its content, and
-resolve only after durable acceptance. Reject to retain the ordinary draft and display the failure; core does not
-fall back to a plain send. More than one pending transport blocks Send visibly. Core clears only unchanged submitted
-draft revisions after acceptance. Use `composer.attachments` for pending cards, with `useComposer().target` to hide
-conversation-only cards on a new composer. Draft edits and attachment rendering must never submit messages.
 
 ### Panels
 
@@ -327,12 +284,25 @@ Tool renderers also receive `core`, starting with the generic tool card. Like en
 discovery order (built-in → user → project): each receives the previous rendering, and its error boundary falls back
 to that rendering. Return `core` to leave it unchanged, wrap it to decorate it, or replace it with your own card.
 
+### Link renderers
+
+`link` renders the links in Markdown that `MessageResponse` shows (messages, reports). It receives `{ href, children,
+core }`; `core` starts as Streamdown's link, which asks "Open external link?" before opening a new tab. Like tool
+renderers, link renderers compose in discovery order behind error boundaries that fall back to `core`: return `core`
+for links you leave alone. A link still streaming never reaches them. `instance` renders links to its previews as chips
+that open in the window.
+
+```tsx
+link: ({ href, children, core }) =>
+  href.startsWith('https://docs.example.com/') ? <a href={href}>{children}</a> : core
+```
+
 ### Message actions
 
 `messageActions` contributes components to the hover action row on stored user and assistant messages, between the
 copy-message and copy-reference buttons. Each receives `{ entry }`, follows discovery order (then array order), and
 runs in its own error boundary. Return `null` for messages you do not act on. Keep buttons compact and give them an
-accessible label and a tooltip, as `lineage` does for its branch action.
+accessible label and a tooltip.
 
 ```tsx
 messageActions: [
@@ -351,6 +321,12 @@ messageActions: [
 
 `messageDetails` contributes readouts to the same row, before the message's time, under the same rules. `status-line`
 shows each message's context and cost there.
+
+`answerLabels` contributes inline labels after the **Final answer** heading, only on stored final assistant messages
+(not streaming updates). Like `messageDetails`, it is an array of components receiving `{ entry: EntryRecord }`,
+rendered in discovery and contribution order, each behind an extension boundary. Return `null` when the entry has
+no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Board uses it to show where an
+answer was sent, or that a one-way message's answer was not sent.
 
 ### Entry renderers
 
@@ -478,7 +454,7 @@ The `ActionContext` import is type-only. The path above is right for `.ultimate/
 (built-ins use `../../server/actions.ts`); in another project nothing type-checks it and the import is erased, so it
 runs either way.
 
-- **Arguments come from the browser**: validate them before they reach a command line. `exec` takes an argument list,
+- **Arguments are untrusted, from the browser or an agent**: make actions safe to call from an agent and validate args before they reach a command line. `exec` takes an argument list,
   never a shell string, so quoting is never the problem; meaning is.
 - **Return small JSON shaped for the UI**, not raw command output. Ask CLIs for JSON (`gh … --json`) and limit how much
   they return.
@@ -491,16 +467,14 @@ runs either way.
 
 Call actions from the UI in one of two ways:
 
-- `useAction(extension, name, args?, { enabled?, onError?, conversationId? })` reads. It calls on mount and again whenever `extension`,
-  `name`, `args` (compared as JSON), or `conversationId` change, unless `enabled` is false; a newer call aborts the older one. It returns
+- `useAction(extension, name, args?, { enabled?, onError? })` reads. It calls on mount and again whenever `extension`,
+  `name`, or `args` (compared as JSON) change, unless `enabled` is false; a newer call aborts the older one. It returns
   `{ data, error, loading, refetch }`: `data` stays while a refetch runs and resets when the args change; `refetch()`
   calls again, also when not `enabled`. A failure shows as a notice unless you pass `onError`.
 - `api.action(extension, name, args?, { conversationId?, signal?, keepalive? })` acts, once: a click that saves,
   closes, or labels something; `keepalive` lets a call sent on `pagehide` outlive the page. It returns a promise of
   the result; afterwards, `refetch()` what changed. A rejection (an `ActionError` with `extension`, `action`,
   `status`, `message`) that nothing catches shows as a notice; catch it to handle it yourself.
-
-Both default to the shown conversation when `conversationId` is undefined. An explicit number selects that conversation; `null` omits conversation context entirely. Use `null` for a new root, or `null` plus an action-specific `{ source }` argument for a new branch; never inherit the ambient shown conversation for a new composer.
 
 ```tsx
 <Button
@@ -513,11 +487,23 @@ Both default to the shown conversation when `conversationId` is undefined. An ex
 </Button>
 ```
 
-Actions are browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin` matching the server's
-port. A plain agent `curl` receives 403. This prevents accidental calls, not deliberate header forgery. For an intentional
-local test, emulate the browser:
-`curl -s -X POST -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"args":null}' <url>/api/extensions/todos/actions/list`
-answers `{"result": …}` or `{"error": …}` (the URL is in the system prompt and the Info panel).
+Agents call actions in codemode with `await ultimate.action('todos', 'list', args)`, returning the result directly
+or throwing the action's error. Calls run in-process on behalf of the calling conversation, with the sandbox abort
+signal; omitted args become null. `ultimate.extensions()` lists actions; document their args in your README.
+
+A server facet may export `userActions: string[]` alongside `actions` to reserve named actions for the UI.
+Every name must refer to a registered action; invalid declarations fail facet installation. Use this for choices
+only the user should make, such as granting project trust, managing secrets, or logging in to providers:
+
+```ts
+export const userActions = ['decide']
+```
+
+Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
+
+The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`
+matching the server's port. A plain agent `curl` receives 403; use `ultimate.action` instead of forging browser headers.
 
 ## Surfaces
 
@@ -758,7 +744,7 @@ For a request such as "build a triage surface for this repo's GitHub issues":
 3. **Write `server.ts`**: `defineExtension({ name })` and `actions` that wrap those commands with `ctx.exec`, validate
    their args, and return small JSON shaped for the UI. Return setup states (missing tool, no login, no repository)
    as data, so the UI can say what to do.
-4. **Check each action with `curl`** (see [Actions](#actions)) before any UI exists.
+4. **Check each action with codemode `ultimate.action`** (see [Actions](#actions)) before any UI exists.
 5. **Write `web.tsx`** from the Commits example: keep `Header`, `Dock` with `Conversation variant="dock"`, and
    `StatusLine`; replace the list and the detail. Read with `useAction`, act with `api.action` then `refetch`, keep
    the selection and filters in `useExtensionUiState`, and hand work to the agent with `api.submit(text, 'followUp')`,

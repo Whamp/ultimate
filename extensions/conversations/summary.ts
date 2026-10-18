@@ -61,6 +61,7 @@ export type SummaryResult = {
   title?: string
   summary?: string
   feature?: string
+  abstract?: string
 }
 
 /** A summary model response as received, memoized so a resumed task reuses it instead of asking again. */
@@ -82,6 +83,7 @@ export type SummaryState = {
   generatedTitle?: string
   summary?: string
   feature?: string
+  abstract?: string
   summaryOwed?: boolean
   assessment?: Assessment
   activity?: string
@@ -245,6 +247,7 @@ export async function generateSummary(
   receipt: SummaryReceipt,
   mode: 'reply' | 'spawn' | 'intent' = 'reply',
   root = false,
+  withAbstract = false,
 ): Promise<SummaryResult> {
   const response = await askSummaryModel(
     models,
@@ -260,7 +263,10 @@ export async function generateSummary(
         ? ''
         : root
           ? ' Also include "feature": the product or tool this conversation builds as a whole; it is the root of a line of work, so name the whole, not the part worked on now. Use 1–3 words and at most 32 characters, title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless it names a part rather than the whole.'
-          : ' Also include "feature": the product feature or area being worked on, in 1–3 words and at most 32 characters, using title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless the conversation has clearly moved to a different feature.'),
+          : ' Also include "feature": the product feature or area being worked on, in 1–3 words and at most 32 characters, using title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless the conversation has clearly moved to a different feature.') +
+      (withAbstract && mode === 'reply'
+        ? ' Also include "abstract": plain text for the tree tally, dense and self-contained, at most 1200 characters with short labelled lines: Ask (original intent in one line), Diverged (new agreements, different approach/library or scope; "none" if none), State (done/landed/submitted/blocked and commits named in the transcript), Areas (key files), Open (questions). Update the previous abstract using the transcript; do not invent facts.'
+        : ''),
     input,
     signal,
     receipt,
@@ -285,6 +291,17 @@ export async function generateSummary(
           assessment: (parsed as SummaryResult).assessment,
           activity: (parsed as SummaryResult).activity.replace(/\s+/g, ' ').trim().slice(0, 160),
         }
+  if (withAbstract && mode === 'reply') {
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !('abstract' in parsed) ||
+      typeof parsed.abstract !== 'string' ||
+      !parsed.abstract.trim()
+    )
+      throw new Error('Invalid abstract response')
+    result.abstract = parsed.abstract.trim().slice(0, 1200)
+  }
   if (!withSummary) return result
   if (
     !parsed ||
@@ -322,7 +339,8 @@ export async function resetAfter(tx: Tx, id: ConversationId, entry: EntryId) {
       64,
       cursor,
     )
-    if (page.items.some((item) => item.kind === 'pi.reset')) return true
+    if (page.items.some((item) => item.conversationId === id && item.kind === 'pi.reset'))
+      return true
     cursor = page.next
   } while (cursor !== undefined)
   return false
@@ -334,6 +352,7 @@ export async function exchangeUser(tx: Tx, id: ConversationId) {
   do {
     const page = await tx.scanEntries({ conversationId: id }, 64, cursor)
     for (const entry of page.items) {
+      if (entry.conversationId !== id) continue
       if (entry.kind === 'pi.reset') return undefined
       if (isInput(entry)) return entry
     }
@@ -362,7 +381,7 @@ async function currentContext(tx: Tx, id: ConversationId, answer: EntryId) {
       64,
       cursor,
     )
-    if (page.items.some(isInput)) return false
+    if (page.items.some((entry) => entry.conversationId === id && isInput(entry))) return false
     cursor = page.next
   } while (cursor !== undefined)
   return true
@@ -408,6 +427,7 @@ export async function requestSummary(
         cursor,
       )
       for (const entry of page.items) {
+        if (entry.conversationId !== id) continue
         if (isInput(entry)) {
           users++
           intent = entry.id
@@ -453,7 +473,14 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
     ),
     | { phase: 'observe' }
     | { phase: 'prepare'; answer: EntryId; summary: boolean }
-    | { phase: 'generate'; answer: EntryId; input: string; summary: boolean; root?: boolean },
+    | {
+        phase: 'generate'
+        answer: EntryId
+        input: string
+        summary: boolean
+        root?: boolean
+        abstract?: boolean
+      },
     null
   >({
     name: 'conversations.summary',
@@ -535,6 +562,9 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
         const root =
           (await host.use?.<LineageService>('lineage')?.rootOf(runtime.conversationId, context)) ===
           runtime.conversationId
+        const branch = task.input.generation
+          ? await host.use?.<LineageService>('lineage')?.branchOf(runtime.conversationId, context)
+          : undefined
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
           if (state.pending !== task.id || state.revision !== task.input.revision) return terminal
@@ -550,7 +580,11 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               answer,
               summary: task.state.checkpoint.summary,
               ...(root ? { root } : {}),
+              ...(branch ? { abstract: true } : {}),
               input:
+                (branch
+                  ? `Original branch intent (untrusted source text):\n${branch.intent?.slice(0, 2400) ?? 'Not recorded'}\n\nPrevious abstract:\n${state.abstract ?? 'None'}\n\n`
+                  : '') +
                 (requestText
                   ? `Original request (untrusted source text):\n${requestText}\n\n`
                   : '') +
@@ -620,6 +654,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               },
               task.input.intent ? 'intent' : task.input.spawn ? 'spawn' : 'reply',
               checkpoint.root,
+              checkpoint.abstract,
             )
             result = await runtime.memo('reply', result, context)
           }
@@ -666,6 +701,16 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               ...modelOf(response, model),
               at: now,
             })
+          // Lineage reads conversation records, so the abstract goes before this transaction's first entry.
+          if (checkpoint.abstract && result.abstract && completed !== undefined) {
+            await host.use?.<LineageService>('lineage')?.abstract(tx, runtime.conversationId, {
+              text: result.abstract,
+              at: checkpoint.answer,
+              title: result.title ?? state.generatedTitle,
+              feature: result.feature ?? state.feature,
+            })
+            state.abstract = result.abstract
+          }
           if (completed !== undefined) {
             state.assessment = {
               inputId: completed,
