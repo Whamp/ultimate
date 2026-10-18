@@ -17,11 +17,14 @@ afterEach(() => {
   counts.clear()
 })
 function search(seed: number, numRuns = 150) {
-  return {
+  const parameters = {
     seed: Number(process.env.SCHEDULE_SEED ?? seed),
     numRuns,
-    ...(process.env.SCHEDULE_PATH ? { path: process.env.SCHEDULE_PATH } : {}),
+  } satisfies fc.Parameters
+  if (process.env.SCHEDULE_PATH) {
+    return { ...parameters, path: process.env.SCHEDULE_PATH }
   }
+  return parameters
 }
 const timestamp = fc
   .tuple(

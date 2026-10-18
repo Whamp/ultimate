@@ -140,7 +140,7 @@ it('concurrent evals retain independent active-test deadlines across async work'
 
 it('deadline identifies a real held tool, its arguments, submission and whole-harness scope', async () => {
   const f = await fixture()
-  const result = turn(f.harness, f.conversation).catch((error: Error) => error)
+  const result = turn(f.harness, f.conversation).catch((error: unknown) => error)
   await until(f.held)
   await vi.advanceTimersByTimeAsync(240_000)
   const error = await result
@@ -173,7 +173,7 @@ it('terminal provider failure is not mislabeled idle timeout while unrelated wor
   )
   let settled = false
   const result = turn(f.harness, other)
-    .catch((error: Error) => error)
+    .catch((error: unknown) => error)
     .finally(() => {
       settled = true
     })
@@ -196,7 +196,7 @@ it('a successful target can time out awaiting whole-harness idle on another conv
     { ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } },
     context,
   )
-  const result = turn(f.harness, other).catch((error: Error) => error)
+  const result = turn(f.harness, other).catch((error: unknown) => error)
   await until(async () =>
     (await readEvalDiagnostics(f.harness, other, 0)).recentEntries.some(
       (entry) => entry.kind === 'pi.assistant',
@@ -252,7 +252,7 @@ it('later turns cannot restart a fresh 240s beyond the shared test deadline', as
   await vi.advanceTimersByTimeAsync(230_000)
   let settled = false
   const result = turn(f.harness, f.conversation, deadline)
-    .catch((error: Error) => error)
+    .catch((error: unknown) => error)
     .finally(() => {
       settled = true
     })
