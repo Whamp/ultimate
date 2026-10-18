@@ -1,10 +1,12 @@
 import { defineConfig } from 'vitest/config'
+import { EVAL_BUDGETS } from './budgets.ts'
 
 export default defineConfig({
   test: {
     include: ['evals/**/*.eval.ts'],
-    testTimeout: 300_000,
-    hookTimeout: 300_000,
+    setupFiles: ['./evals/setup.ts'],
+    testTimeout: EVAL_BUDGETS.outerTestMs,
+    hookTimeout: EVAL_BUDGETS.outerTestMs,
     maxWorkers: 4,
     maxConcurrency: 4,
     sequence: { concurrent: true },
