@@ -192,15 +192,20 @@ export function createStore(options: StoreOptions = {}) {
       case 'tasks':
         set({ tasks: data as TaskGraph })
         break
-      case 'notice':
-        // The replica sends its offline notice with every SSE snapshot. Facet subscriptions reopen the stream;
-        // show that notice once per offline transition, not again for each subscription or conversation switch.
-        if (state.system?.offline) {
+      case 'notice': {
+        const notice = data as BrowserNotice
+        // Only the replica's repeated snapshot notice is deduplicated. Other failures must remain visible offline.
+        if (
+          state.system?.offline &&
+          notice.level === 'warning' &&
+          notice.message === 'The machine is offline. This is the last synced state.'
+        ) {
           if (offlineNoticeShown) break
           offlineNoticeShown = true
         }
-        addNotice(data as BrowserNotice)
+        addNotice(notice)
         break
+      }
     }
   }
   function addNotice(notice: BrowserNotice) {
@@ -388,7 +393,7 @@ export function createStore(options: StoreOptions = {}) {
     },
     /** Add a notice from the browser, such as a failed command. */
     notify(notice: BrowserNotice) {
-      handle('notice', notice)
+      addNotice(notice)
     },
     dismissNotice(id: number) {
       set({ notices: state.notices.filter((notice) => notice.id !== id) })

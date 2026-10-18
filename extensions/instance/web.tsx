@@ -14,6 +14,7 @@ import {
 import {
   cn,
   defineWebExtension,
+  projectBase,
   shortenPath,
   useAction,
   useConversations,
@@ -227,7 +228,7 @@ function usePreviewTarget(href: string, own = false): Target | undefined {
   if (!url || !/^https?:$/.test(url.protocol) || !isLoopback(url.hostname) || !url.port)
     return undefined
   if (system && url.port === new URL(system.process.url).port)
-    return { kind: 'self', href: at(location.origin, url) }
+    return { kind: 'self', href: at(location.origin + projectBase(), url) }
   const known = list?.filter((item) => new URL(item.url).port === url.port) ?? []
   const live = known.find((item) => item.running)
   if (!live) return known.length || own ? { kind: 'off', reason: 'Not running' } : undefined

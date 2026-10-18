@@ -1,3 +1,4 @@
+import type { JsonRepresentation } from '@earendil-works/chord'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ArrowUpIcon, MessagesSquareIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -35,7 +36,7 @@ import {
 } from './data.tsx'
 import type { Addresses, BoardData } from './data.tsx'
 
-const useBoard = () => useDocOf<BoardData>(1, 'board') ?? emptyBoard
+const useBoard = () => useDocOf<JsonRepresentation<BoardData>>(1, 'board') ?? emptyBoard
 
 /** One side of the open-request summary; amber while anyone is waiting. */
 function Count({ value, children }: { value: number; children: ReactNode }) {

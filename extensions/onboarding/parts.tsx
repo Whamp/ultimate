@@ -30,11 +30,6 @@ interface Described {
   replaces?: 'builtin'
 }
 
-/** The Extensions panel's setup entry point; the overlay routes it to @ultimate, not a dialog. */
-export const projectDialog = 'onboarding.project'
-/** The start page's Isolated switch entry point; the overlay routes it to @ultimate. */
-export const gitDialog = 'onboarding.git'
-
 export const sources: Record<ExtensionInfo['source'], string> = {
   builtin: 'built-in',
   user: 'yours',

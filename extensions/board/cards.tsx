@@ -1,3 +1,4 @@
+import type { JsonRepresentation } from '@earendil-works/chord'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   ArrowRightIcon,
@@ -320,7 +321,7 @@ function outgoingState(message: BoardMessage | undefined, toUser: boolean, sendi
 
 /** The `message` tool as the message it sent; a failed call keeps the generic card with its error. */
 export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf<BoardData>(1, 'board')
+  const board = useDocOf<JsonRepresentation<BoardData>>(1, 'board')
   const { switchConversation, showSurface } = useUltimate()
   if (call.status === 'error' || call.status === 'interrupted') return core
   const sent = /^Message (\d+) sent\.$/.exec(call.output)
@@ -390,7 +391,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
 
 /** The `branch` tool as the branch it started and the prompt it was given; a failed call keeps the generic card. */
 export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf<BoardData>(1, 'board')
+  const board = useDocOf<JsonRepresentation<BoardData>>(1, 'board')
   const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
   if (call.status === 'error' || call.status === 'interrupted') return core

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ActionError, createApi, MachineOfflineError } from '../../web/src/sdk/api.ts'
+import { MachineOfflineError as SdkMachineOfflineError } from '../../web/src/sdk/errors.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
 import { skillPickerRequest } from '../../extensions/skill-picker/skill-picker-client.tsx'
 
@@ -12,6 +13,10 @@ function setup(respond: (url: string, init: RequestInit) => Response | Promise<R
 }
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+
+it('keeps the API offline error export identical to the SDK error class', () => {
+  expect(MachineOfflineError).toBe(SdkMachineOfflineError)
+})
 
 describe('extension actions', () => {
   it('posts args for the shown conversation and resolves with the result', async () => {

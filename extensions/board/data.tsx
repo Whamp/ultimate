@@ -1,6 +1,7 @@
 import { subagentsBusy } from '../conversations/subtree.tsx'
 
-export type BoardMessage = {
+/** One durable Board message and its delivery/answer state. */
+export interface BoardMessage {
   id: number
   from: number | 'user'
   to: number | 'user'
@@ -20,18 +21,28 @@ export function answeredMessages(messages: BoardMessage[], conversation: number,
   return messages.filter((message) => message.to === conversation && message.answer === entry)
 }
 
-export type Addresses = {
+/** Addresses currently available to the Board composer. */
+export interface Addresses {
   agents: { name: string; description: string; id?: number }[]
   lander?: number
   concluded?: number[]
   conversations: { id: number; title?: string }[]
 }
-export type BoardData = { messages: BoardMessage[]; next: number; readUpTo: number }
+/** Board messages and the user's read cursor. */
+export interface BoardData {
+  messages: BoardMessage[]
+  next: number
+  readUpTo: number
+}
 export const emptyBoard: BoardData = { messages: [], next: 1, readUpTo: 0 }
-export const unreadCount = (board: BoardData) =>
-  board.messages.filter((message) => message.to === 'user' && message.id > board.readUpTo).length
+/** Incoming messages newer than the user's read cursor. */
+export function unreadCount(board: BoardData) {
+  return board.messages.filter((message) => message.to === 'user' && message.id > board.readUpTo)
+    .length
+}
 
-export type Participant = {
+/** A person or conversation shown in the Board's participant list. */
+export interface Participant {
   key: string
   id?: number | 'user'
   name: string
@@ -39,7 +50,7 @@ export type Participant = {
   status: 'working' | 'delegating' | 'waiting' | 'needs input' | 'idle'
   at?: number
 }
-type Conversation = {
+interface Conversation {
   id: number
   title?: string
   label?: string
@@ -54,8 +65,9 @@ export function participantMessages(messages: BoardMessage[], id: number | 'user
 }
 
 /** A reply-enabled message still waiting for its answer. */
-export const isOpen = (message: BoardMessage) =>
-  message.reply && (message.state === 'sent' || message.state === 'delivered')
+export function isOpen(message: BoardMessage) {
+  return message.reply && (message.state === 'sent' || message.state === 'delivered')
+}
 
 /** Where a message sits in a chat seen from `perspective`: its own messages right, received ones left, others aside. */
 export function side(message: BoardMessage, perspective: number | 'user') {

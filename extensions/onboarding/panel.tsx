@@ -20,15 +20,8 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
-import {
-  Heading,
-  Line,
-  Segmented,
-  projectDialog,
-  projectLists,
-  sources,
-  useDescribed,
-} from './parts.tsx'
+import { askUltimate } from './askUltimate.ts'
+import { Heading, Line, Segmented, projectLists, sources, useDescribed } from './parts.tsx'
 
 type Scope = 'project' | 'user'
 
@@ -84,12 +77,15 @@ function Diagnostics({ messages }: { messages: readonly string[] }) {
 function ProjectSetup({ system }: { system: SystemInfo }) {
   const { project } = system
   const ui = useUltimate()
-  const [busy, setBusy] = useState<'local' | 'global' | 'adopt'>()
+  const [busy, setBusy] = useState<'local' | 'global' | 'adopt' | 'help'>()
   const [error, setError] = useState<string>()
   const [adopted, setAdopted] = useState(false)
   const { enable, disable } = projectLists(system)
   const copies = enable.length + disable.length
-  const run = async (kind: 'local' | 'global' | 'adopt', action: () => Promise<unknown>) => {
+  const run = async (
+    kind: 'local' | 'global' | 'adopt' | 'help',
+    action: () => Promise<unknown>,
+  ) => {
     setBusy(kind)
     setError(undefined)
     setAdopted(false)
@@ -120,7 +116,13 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
             {' '}
             <button
               className="text-brand outline-none hover:underline focus-visible:underline"
-              onClick={() => ui.open(projectDialog)}
+              disabled={busy !== undefined}
+              onClick={() =>
+                void run('help', async () => {
+                  ui.switchConversation(await askUltimate('project'))
+                  ui.showSurface('agent')
+                })
+              }
               type="button"
             >
               About this setup
@@ -188,7 +190,11 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
           Use this project's setup everywhere
         </Button>
       )}
-      {error && <p className="mt-2 font-mono text-[11px] leading-snug text-error">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-2 font-mono text-[11px] leading-snug text-error">
+          {error}
+        </p>
+      )}
       {adopted && (
         <p className="mt-2 font-mono text-[11px] leading-snug text-success">
           Copied {copies} choices into ~/.ultimate/settings.json
