@@ -15,6 +15,7 @@ import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-d
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
+import { evalTestDeadline, waitForTurn } from './turn.ts'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
 import { attach, until } from '../test/helpers.ts'
@@ -161,6 +162,7 @@ export async function start(
     }
     return {
       projectRoot,
+      harness: running.harness,
       file: (path: string) => readFile(join(projectRoot, path), 'utf8'),
       exec: (command: string, args: string[]) => exec(command, args, { cwd: projectRoot }),
       action: (extension: string, action: string, args: unknown = {}) =>
@@ -230,56 +232,74 @@ export async function start(
           async run(input: string) {
             const before = (await messages()).length
             const started = performance.now()
-            const { submissionId } = await post(`/api/conversations/${id}/submit`, { text: input })
-            const submission = await running.harness.submission(submissionId, context)
-            if (!submission) throw new Error('Missing submitted input')
-            let timer: ReturnType<typeof setTimeout> | undefined
+            const deadline = evalTestDeadline.getStore()
+            if (deadline === undefined)
+              throw new Error('Eval test deadline missing; load evals/setup.ts')
+            let turn: Message[] = []
+            const usage = zeroUsage()
+            let wallMs = 0
+            let completed = false
+            let failure: string | undefined
+            const traceFile = inject('evalTraceFile')
             try {
-              await Promise.race([
-                (async () => {
-                  await submission.wait(context)
-                  await running.harness.waitForIdle(context)
-                })(),
-                new Promise<never>((_, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error(`Conversation ${id} did not become idle within 240s`)),
-                    240_000,
-                  )
-                }),
-              ])
+              await waitForTurn(
+                running.harness,
+                conversation,
+                async () => {
+                  const { submissionId } = await post(`/api/conversations/${id}/submit`, {
+                    text: input,
+                  })
+                  const submission = await running.harness.submission(submissionId, context)
+                  if (!submission) throw new Error('Missing submitted input')
+                  return submission
+                },
+                deadline,
+              )
+              completed = true
+            } catch (cause) {
+              failure = cause instanceof Error ? cause.message : String(cause)
+              throw new Error(`Eval turn failed; trace: ${traceFile}\n${failure}`, { cause })
             } finally {
-              clearTimeout(timer)
+              // Failed turns can already have paid responses. Record those too, before cleanup removes the home.
+              turn = (await messages()).slice(before)
+              for (const reply of turn) {
+                if (reply.role !== 'assistant') continue
+                for (const key of [
+                  'input',
+                  'output',
+                  'cacheRead',
+                  'cacheWrite',
+                  'totalTokens',
+                ] as const)
+                  usage[key] += reply.usage[key]
+                for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
+                  usage.cost[key] += reply.usage.cost[key]
+              }
+              wallMs = performance.now() - started
+              const measured: TurnUsage = {
+                model,
+                tokens: usage.totalTokens,
+                cost: usage.cost.total,
+                wallMs,
+                unfinished: !completed,
+              }
+              await appendFile(inject('evalUsageFile'), JSON.stringify(measured) + '\n')
+              // Persist actual arguments/results even when a later scenario assertion fails.
+              await appendFile(
+                traceFile,
+                JSON.stringify({
+                  conversationId: id,
+                  input,
+                  ...measured,
+                  messages: turn,
+                  failure,
+                }) + '\n',
+              )
             }
-            const turn = (await messages()).slice(before)
             const replies = turn.filter((m): m is AssistantMessage => m.role === 'assistant')
             const results = turn.filter((m): m is ToolResultMessage => m.role === 'toolResult')
-            const usage = zeroUsage()
-            for (const reply of replies) {
-              for (const key of [
-                'input',
-                'output',
-                'cacheRead',
-                'cacheWrite',
-                'totalTokens',
-              ] as const)
-                usage[key] += reply.usage[key]
-              for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
-                usage.cost[key] += reply.usage.cost[key]
-            }
-            const wallMs = performance.now() - started
-            const measured: TurnUsage = {
-              model,
-              tokens: usage.totalTokens,
-              cost: usage.cost.total,
-              wallMs,
-            }
-            await appendFile(inject('evalUsageFile'), JSON.stringify(measured) + '\n')
-            const failed = replies.find(
-              (m) => m.stopReason === 'error' || m.stopReason === 'aborted',
-            )
-            if (failed)
-              throw new Error(`Model turn failed: ${failed.errorMessage ?? failed.stopReason}`)
-            if (!replies.length) throw new Error('Model turn produced no assistant reply')
+            if (!replies.length)
+              throw new Error(`Model turn produced no assistant reply; trace: ${traceFile}`)
             return {
               text: replies
                 .flatMap((m) => m.content.filter((c) => c.type === 'text').map((c) => c.text))
@@ -288,7 +308,8 @@ export async function start(
                 .flatMap((m) => m.content.filter((c): c is ToolCall => c.type === 'toolCall'))
                 .map((call) => {
                   const result = results.find((r) => r.toolCallId === call.id)
-                  if (!result) throw new Error(`Tool ${call.name} has no result`)
+                  if (!result)
+                    throw new Error(`Tool ${call.name} has no result; trace: ${traceFile}`)
                   return { ...call, result: result.content, isError: result.isError }
                 }),
               usage,

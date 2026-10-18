@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['evals/**/*.eval.ts'],
+    setupFiles: ['./evals/setup.ts'],
     testTimeout: 300_000,
     hookTimeout: 300_000,
     maxWorkers: 4,
