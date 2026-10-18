@@ -133,12 +133,13 @@ test('E3 edits and commits stay in the isolated checkout', async () => {
     extensions: { enable: ['workspaces'] },
   })
   try {
+    const sourceTip = (await ultimate.exec('git', ['rev-parse', 'HEAD'])).stdout.trim()
     const { result: created } = await ultimate.action('workspaces', 'create', {
       title: 'Isolated notes',
     })
     const c = await ultimate.conversation({ id: created.id as ConversationId })
     const turn = await c.run(
-      "Add NOTES.md containing 'isolated', commit it with git user.name=Eval and user.email=eval@example.invalid, then report workspace status including the workspace branch name and its commits ahead. Do not land or push.",
+      "Add NOTES.md containing 'isolated', commit it with git user.name=Eval and user.email=eval@example.invalid, then report workspace status as only a JSON object with branch (the workspace branch name) and ahead (the number of commits ahead of the source). Do not land or push.",
     )
     const { result: info } = await ultimate.action('workspaces', 'info', { id: c.id })
     expect(await readFile(join(info.path, 'NOTES.md'), 'utf8')).toMatch(/isolated/)
@@ -147,9 +148,21 @@ test('E3 edits and commits stay in the isolated checkout', async () => {
     )
     expect((await ultimate.exec('git', ['status', '--porcelain'])).stdout).toBe('')
     await expect(access(join(ultimate.projectRoot, 'NOTES.md'))).rejects.toThrow('ENOENT')
-    expect(turn.toolCalls.some((call) => call.name === 'workspace' && !call.isError)).toBe(true)
-    expect(turn.text).toContain(info.branch)
-    expect(turn.text).toMatch(/ahead|commit/i)
+    expect((await ultimate.exec('git', ['rev-parse', 'HEAD'])).stdout.trim()).toBe(sourceTip)
+    const branch = (
+      await exec('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: info.path })
+    ).stdout.trim()
+    await exec('git', ['merge-base', '--is-ancestor', sourceTip, 'HEAD'], { cwd: info.path })
+    const ahead = Number(
+      (await exec('git', ['rev-list', '--count', `${sourceTip}..HEAD`], { cwd: info.path })).stdout,
+    )
+    expect(ahead).toBeGreaterThan(0)
+    expect(info.branch).toBe(branch)
+    expect(info.ahead).toBe(ahead)
+    expect(JSON.parse(turn.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''))).toEqual({
+      branch,
+      ahead,
+    })
     measure('E3-workspace', turn)
   } finally {
     await ultimate.stop()

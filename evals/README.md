@@ -45,5 +45,12 @@ not wrong task/status associations or a missing/reversed prerequisite relation.
 This isolates later model visibility from model choice of planning arguments; it does not
 prove model variance eliminated or turn an omitted argument into a persistence defect.
 
+E3 checks the isolated file/commit and truthful branch/ahead report, not which tool the
+model chooses. It compares the final JSON report and canonical workspace info with Git's
+actual branch and ancestry count from the fixed pre-run source tip, and verifies the source
+stays clean and at that tip. Multiple commits are allowed; the actual ahead count must be
+positive and reported exactly. Real-model workspace-tool-choice coverage is no longer part
+of E3; deterministic workspace API tests still cover the mechanics.
+
 Prefer evals for tool choice and completing user requests, not exact wording.
 Keep faux tests for crashes, races, storage, durability, and process semantics.
