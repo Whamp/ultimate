@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile, access, symlink, realpath } from '
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import { expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -14,14 +14,12 @@ import workspaceExtension, {
 } from '../extensions/workspaces/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
-import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
 import lineage, { leaveNote, Roots, startBranch } from '../extensions/lineage/server.ts'
 import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
 import { Board } from '../extensions/board/server.ts'
-import type { BoardService } from '../extensions/board/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import { Subagents } from '../extensions/subagents/server.ts'
 import { seedTally, temp, until } from './helpers.ts'
@@ -32,6 +30,10 @@ import {
   commitWorkspaceFile as commit,
   holdWorkspaceGit as holdGit,
 } from './test-utils/workspace-fixture.ts'
+
+import { workspaceLanderFixture as lander } from './test-utils/workspaceLanderFixture.ts'
+import { submittedWorkspaceReports as submitted } from './test-utils/submittedWorkspaceReports.ts'
+import { workspaceLanderLog as landerLog } from './test-utils/workspaceLanderLog.ts'
 
 // Each test owns its repository and harness.
 vi.setConfig({ maxConcurrency: 16 })
@@ -247,18 +249,6 @@ it.concurrent('queued landing reads the current record after another workspace l
   await landing
   expect(await queued).toMatchObject({ message: 'Workspace is removed' })
 })
-it.concurrent('requires nonempty divergence for submit before queuing anything', async () => {
-  const f = await lander({})
-  const id = await f.create()
-  await f.service.ready(id, context)
-  for (const args of [{ action: 'submit' }, { action: 'submit', divergence: '   ' }]) {
-    const result = await f.call(id, 'workspace', args)
-    expect(JSON.stringify(result)).toContain('Submitting requires divergence')
-  }
-  expect(
-    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue,
-  ).toHaveLength(0)
-})
 
 it.concurrent('refuses dirty workspaces, overlapping dirty targets, changed branches and diverged targets', async () => {
   const f = await fixture()
@@ -380,51 +370,6 @@ it.concurrent('starts a worker isolate, commits in the child and lands it throug
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
 })
-async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
-  await until(async () => {
-    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-    return !index.queue.length && !Object.keys(index.landers).length
-  })
-  const conversation = (await f.opened.harness.conversation(id, context))!
-  await conversation.waitForIdle(context)
-  const view = await conversation.viewState(context)
-  try {
-    const reports = view.value.entries.filter((entry) => entry.kind === 'workspaces.lander-report')
-    for (const report of reports) {
-      const { id: submission, outcome } = report.data as {
-        id: string
-        outcome: WorkspaceIndex['results'][string]
-      }
-      const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-      expect(outcome).toEqual(index.results[submission])
-      expect(outcome.lander).toBeGreaterThan(0)
-      expect(outcome.steps.length).toBeGreaterThan(0)
-    }
-    return reports.map((entry) => JSON.stringify(entry.model))
-  } finally {
-    view.dispose()
-  }
-}
-/** The lander conversation of the project source and its `ultimate.lander` log. */
-async function landerLog(f: Awaited<ReturnType<typeof fixture>>) {
-  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-  const id = index.landerConversations[await realpath(f.projectRoot)] as ConversationId
-  const conversation = (await f.opened.harness.conversation(id, context))!
-  const view = await conversation.viewState(context)
-  try {
-    return {
-      id,
-      metadata: await f.opened.harness.snapshot(Metadata, id, context),
-      cwd: (await conversation.agent(context)).cwd,
-      kinds: view.value.entries.map((entry) => entry.kind),
-      log: view.value.entries
-        .filter((entry) => entry.kind === 'ultimate.lander')
-        .map((entry) => entry.data as LanderEntry),
-    }
-  } finally {
-    view.dispose()
-  }
-}
 async function rootNotes(f: Awaited<ReturnType<typeof fixture>>) {
   const root = (await f.opened.harness.conversation(ROOT_CONVERSATION_ID, context))!
   const view = await root.viewState(context)
@@ -685,16 +630,6 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
   ])
   expect(await rootNotes(f)).toHaveLength(0)
 })
-
-async function lander(
-  settings: JsonObject,
-  existing?: Awaited<ReturnType<typeof repository>>,
-  boardEnabled = false,
-) {
-  const f = await fixture([], existing, boardEnabled)
-  f.host.projectSettings = async () => ({ lander: settings })
-  return f
-}
 it.concurrent('lets an ownerless history fork submit its own workspace', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
   const entry = await f.opened.harness.commit(
@@ -724,197 +659,6 @@ it.concurrent('lands and reports a submission without a lineage provider', async
   expect(report).toContain('landed as')
   expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
   expect(await rootNotes(f)).toHaveLength(0)
-})
-it.concurrent('records a submission and its report on the board exactly once', async () => {
-  const f = await lander({}, undefined, true)
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  await commit(workspace.path, 'first.txt')
-  const tip = await commit(workspace.path, 'second.txt')
-  const result = await f.service.submit(id, 'None', context)
-  await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(2)
-  expect(messages[0]).toMatchObject({
-    from: id,
-    to: result.lander,
-    kind: 'landing',
-    text: `Submitted ${tip.slice(0, 7)} first.txt and 1 more`,
-  })
-  expect(messages[1]).toMatchObject({
-    from: result.lander,
-    to: id,
-    kind: 'landing',
-    text: `Landed ${tip.slice(0, 7)} on main`,
-  })
-  const report = await f.opened.harness.commit(
-    (tx) => tx.submissionByRequest(id, `lander:${result.id}`),
-    context,
-  )
-  expect(messages[1].entry).toBe(report!.entry)
-})
-it.concurrent('hands matching landings to the deploy agent exactly once', async () => {
-  const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
-  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
-  await writeFile(
-    join(f.directory, '.ultimate/agents/deploy-test.md'),
-    '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
-  )
-  const task = createLander(f.host, Workspaces, (_source, operation) => operation())
-  const reportPhase = task.definition.phases.report
-  let crashes = 0
-  f.prepared.registry.install(
-    defineExtension({
-      ...workspaceExtension(f.host),
-      tasks: [
-        ...(workspaceExtension(f.host).tasks ?? []).filter(
-          (item) => item.definition.name !== task.definition.name,
-        ),
-        {
-          definition: {
-            ...task.definition,
-            phases: {
-              ...task.definition.phases,
-              report: async (...args: Parameters<typeof reportPhase>) => {
-                const [current, runtime, ctx] = args
-                // Crash after board admission but before recording the deploy step. The next run has no step or memo.
-                await expect(
-                  reportPhase(
-                    current,
-                    {
-                      ...runtime,
-                      commit: async () => {
-                        throw new Error('crash after send')
-                      },
-                    },
-                    ctx,
-                  ),
-                ).rejects.toThrow('crash after send')
-                crashes++
-                await reportPhase(current, runtime, ctx)
-              },
-            },
-          },
-        },
-      ],
-    }),
-  )
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  await mkdir(join(workspace.path, 'cloud'), { recursive: true })
-  const tip = await commit(workspace.path, 'cloud/change.txt')
-  const result = await f.service.submit(id, 'None', context)
-  const [report] = await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  const deploy = messages.filter((message) => message.text.includes('Please deploy'))
-  expect(crashes).toBe(1)
-  expect(deploy).toHaveLength(1)
-  expect(deploy[0]).toMatchObject({ from: result.lander, reply: false })
-  expect(deploy[0].text).toContain(tip)
-  expect(deploy[0].text).toContain('cloud/change.txt')
-  expect(deploy[0].text).toContain(`#${id}`)
-  expect(deploy[0].text).toContain('Pushed: no.')
-  expect(deploy[0].text).toContain('Commits:')
-  const recipient = await f.opened.harness.snapshot(
-    Metadata,
-    deploy[0].to as ConversationId,
-    context,
-  )
-  expect(recipient?.title).toBe('@deploy-test')
-  expect(report).toContain('deploy → @deploy-test')
-  expect((await landerLog(f)).log.some((line) => line.step === 'deploy → @deploy-test')).toBe(true)
-})
-it.concurrent('reports a landing with a deploy warning when the handoff itself fails', async () => {
-  const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
-  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
-  await writeFile(
-    join(f.directory, '.ultimate/agents/deploy-test.md'),
-    '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
-  )
-  // The board is there and the agent is resident, but delivery fails, as without a subagents service.
-  const service = f.host.use<BoardService>('board')!
-  service.send = async () => {
-    throw new Error('subagents service unavailable')
-  }
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  await mkdir(join(workspace.path, 'cloud'), { recursive: true })
-  await commit(workspace.path, 'cloud/change.txt')
-  await f.service.submit(id, 'None', context)
-  const [report] = await submitted(f, id)
-  const warning = 'deploy warning: handoff to @deploy-test failed: subagents service unavailable'
-  expect(report).toContain('landed as')
-  expect(report).toContain(warning)
-  expect((await landerLog(f)).log.map((line) => line.step)).toContain(warning)
-  expect(f.notice.mock.calls.flat().join('\n')).toContain(warning)
-})
-it.concurrent.each([
-  { settings: {}, file: 'other.txt', step: undefined },
-  {
-    settings: { deploy: { agent: 'missing', paths: ['cloud/'] } },
-    file: 'other.txt',
-    step: undefined,
-  },
-  {
-    settings: { deploy: { agent: 'missing', paths: ['cloud/'] } },
-    file: 'cloud/change.txt',
-    step: 'deploy warning: @missing is not a standing agent',
-  },
-  {
-    settings: { deploy: { agent: 'nonresident', paths: ['cloud/'] } },
-    file: 'cloud/change.txt',
-    step: 'deploy warning: @nonresident is not a standing agent',
-  },
-  {
-    settings: { deploy: { agent: 'missing', paths: [] } },
-    file: 'cloud/change.txt',
-    step: undefined,
-  },
-])(
-  'deploy hook skips or warns without preventing landing: $settings $file',
-  async ({ settings, file, step }) => {
-    const f = await lander(settings as JsonObject, undefined, true)
-    await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
-    await writeFile(
-      join(f.directory, '.ultimate/agents/nonresident.md'),
-      '---\nname: nonresident\ndescription: Not standing\n---\nNo deploy.\n',
-    )
-    const id = await f.create()
-    await f.service.ready(id, context)
-    const workspace = (await f.service.get(id, context))!
-    await mkdir(join(workspace.path, 'cloud'), { recursive: true })
-    await commit(workspace.path, file)
-    await f.service.submit(id, 'None', context)
-    const [report] = await submitted(f, id)
-    expect(report).toContain('landed as')
-    const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!
-      .messages
-    expect(messages.filter((message) => message.text.includes('Please deploy'))).toHaveLength(0)
-    const steps = (await landerLog(f)).log.filter((line) => line.step?.startsWith('deploy'))
-    expect(steps.map((line) => line.step)).toEqual(step ? [step] : [])
-    const notices = f.notice.mock.calls.flat().join('\n')
-    const invalid = settings.deploy?.paths.length === 0
-    expect(notices).toContain(step ?? (invalid ? 'deploy hook disabled' : ''))
-  },
-)
-it.concurrent('records a failed landing on the board', async () => {
-  const f = await lander({ checks: ['echo REJECTED; false'] }, undefined, true)
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path)
-  const result = await f.service.submit(id, 'None', context)
-  await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(2)
-  expect(messages[1]).toMatchObject({
-    from: result.lander,
-    to: id,
-    kind: 'landing',
-    text: 'Not landed: check failed twice: echo REJECTED; false',
-  })
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })

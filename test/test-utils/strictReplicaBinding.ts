@@ -43,8 +43,9 @@ function hasReplicaBindingKey<T extends object>(target: T, key: PropertyKey): ke
 export function strictReplicaBinding<T extends object>(binding: T): T {
   return new Proxy(binding, {
     get(target, key) {
-      if (!hasReplicaBindingKey(target, key))
+      if (!hasReplicaBindingKey(target, key)) {
         throw new Error(`Unexpected replica binding member: ${String(key)}`)
+      }
       return target[key]
     },
   })
