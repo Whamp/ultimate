@@ -233,7 +233,10 @@ describe('web replica store', () => {
     const system = {
       process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
     } as ServerEvents['system']
-    const notice = { level: 'warning' as const, message: 'The machine is offline' }
+    const notice = {
+      level: 'warning' as const,
+      message: 'The machine is offline. This is the last synced state.',
+    }
     const offlineSystem = { ...system, offline: true }
     latest().send('system', offlineSystem)
     latest().send('notice', notice)
@@ -251,6 +254,47 @@ describe('web replica store', () => {
       'Online again',
       notice.message,
     ])
+    store.stop()
+  })
+
+  it('retains save, action and rejection errors around repeated offline snapshots', async () => {
+    const { store, latest } = setup()
+    const system = {
+      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
+    } as ServerEvents['system']
+    const offline = { ...system, offline: true }
+    const replicaNotice = {
+      level: 'warning' as const,
+      message: 'The machine is offline. This is the last synced state.',
+    }
+    latest().send('system', offline)
+    store.notify({ level: 'error', message: 'UI state not saved: disk full' })
+    latest().send('notice', replicaNotice)
+    store.show(7)
+    await tick()
+    latest().send('system', offline)
+    latest().send('notice', replicaNotice)
+    latest().send('notice', { level: 'error', message: 'A server operation failed' })
+    store.notify({ level: 'error', message: 'board/post: rejected' })
+    store.notify({ level: 'error', message: 'Unhandled rejection' })
+    const retry = vi.fn<() => void>()
+    store.notify({ ...replicaNotice, action: { label: 'Retry', run: retry } })
+    const notices = store.getState().notices
+    expect(notices.map((item) => item.message)).toEqual([
+      'UI state not saved: disk full',
+      replicaNotice.message,
+      'A server operation failed',
+      'board/post: rejected',
+      'Unhandled rejection',
+      replicaNotice.message,
+    ])
+    notices.at(-1)?.action?.run()
+    expect(retry).toHaveBeenCalledOnce()
+    latest().send('system', system)
+    latest().send('system', offline)
+    latest().send('notice', replicaNotice)
+    latest().send('notice', replicaNotice)
+    expect(store.getState().notices).toHaveLength(7)
     store.stop()
   })
 

@@ -13,7 +13,10 @@ import type {
   UiUpdateRequest,
 } from '../../../shared/protocol.ts'
 import { errorMessage } from './format.ts'
+import { MachineOfflineError } from './errors.ts'
 import type { Store } from './store.ts'
+
+export { MachineOfflineError } from './errors.ts'
 
 /** Cloud project URLs keep all API traffic within the selected replica. */
 export function projectBase(path = typeof location === 'undefined' ? '/' : location.pathname) {
@@ -41,9 +44,6 @@ export class ActionError extends Error {
 /** `extension/action: message`, as a notice shows it. */
 export const actionMessage = (error: ActionError) =>
   `${error.extension}/${error.action}: ${error.message}`
-
-/** The replica cannot run this operation until the machine reconnects. Not a server failure. */
-export class MachineOfflineError extends Error {}
 
 class HttpError extends Error {
   readonly status: number

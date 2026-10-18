@@ -35,6 +35,7 @@
     "extensions/sounds/cues.ts",
     "extensions/sounds/tones.ts",
     "extensions/instance/links.ts",
+    "extensions/onboarding/askUltimate.ts",
     "extensions/workspaces/types.ts",
     "extensions/subagents/message-types.ts",
     "extensions/skill-picker/skill-picker-types.ts",

@@ -38,7 +38,8 @@ export {
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
 export { api } from './client.ts'
-export { ActionError } from './api.ts'
+export { ActionError, projectBase } from './api.ts'
+export { MachineOfflineError } from './errors.ts'
 export type { Api } from './api.ts'
 export {
   getConversation,
@@ -122,5 +123,5 @@ export type {
 } from '@earendil-works/pi-ai'
 
 export { ComposerContext, useComposer, useComposerEditor } from './composer.tsx'
-export { useComposerTextarea } from './composer-textarea.ts'
+export { useComposerTextarea } from './useComposerTextarea.ts'
 export type { ComposerAutocomplete, ComposerEditor, ComposerSelection } from './composer.tsx'

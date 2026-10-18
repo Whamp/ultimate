@@ -6,7 +6,6 @@ import {
   errorMessage,
   useAction,
   useConversation,
-  useDialog,
   useEvent,
   useExtensions,
   useSystem,
@@ -18,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FirstRun, GitCard, ProjectCard, Recommended } from './pages.tsx'
 import type { Isolation } from './pages.tsx'
 import { ExtensionsPanel } from './panel.tsx'
-import { gitDialog, projectDialog } from './parts.tsx'
+import { askUltimate } from './askUltimate.ts'
 import type { Status } from './parts.tsx'
 
 function useIsolation() {
@@ -37,43 +36,11 @@ function useIsolation() {
   return workspaces ? isolation.data : undefined
 }
 
-/** Posting creates the standing conversation before addresses returns its id. */
-async function askUltimate(card: 'project' | 'git') {
-  await api.action('board', 'post', {
-    to: '@ultimate',
-    text:
-      card === 'project'
-        ? "Help me decide whether to use this project's setup."
-        : 'Help me set up git for this folder.',
-  })
-  const addresses = await api.action<{ agents: { name: string; id?: number }[] }>(
-    'board',
-    'addresses',
-  )
-  const id = addresses.agents.find((agent) => agent.name === 'ultimate')?.id
-  if (id === undefined) throw new Error('@ultimate has no conversation')
-  return id
-}
-
 function Onboarding() {
   const status = useAction<Status>('onboarding', 'status')
   const ui = useUltimate()
   const [finished, setFinished] = useState(false)
-  // Existing panel/start-page entry points now ask @ultimate too; no setup dialogs remain.
-  const [projectOpen, setProjectOpen] = useDialog(projectDialog)
-  const [gitOpen, setGitOpen] = useDialog(gitDialog)
-  const [error, setError] = useState<string>()
-  useEffect(() => {
-    if (!projectOpen && !gitOpen) return
-    setProjectOpen(false)
-    setGitOpen(false)
-    void askUltimate(projectOpen ? 'project' : 'git')
-      .then((id) => {
-        ui.switchConversation(id)
-        ui.showSurface('agent')
-      })
-      .catch((failure) => setError(errorMessage(failure)))
-  }, [projectOpen, gitOpen, setProjectOpen, setGitOpen, ui])
+
   return (
     <>
       <FirstRun
@@ -88,15 +55,6 @@ function Onboarding() {
           setFinished(true)
         }}
       />
-      {error && (
-        <div
-          role="alert"
-          className="fixed right-4 bottom-12 rounded border border-error/40 bg-card p-3 text-xs text-error"
-          onClick={() => setError(undefined)}
-        >
-          {error}
-        </div>
-      )}
     </>
   )
 }

@@ -22,7 +22,7 @@ import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, composerSubmissions, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { ComposerContext } from '../sdk/composer.tsx'
-import { useComposerTextarea } from '../sdk/composer-textarea.ts'
+import { useComposerTextarea } from '../sdk/useComposerTextarea.ts'
 import { composerSubmissionConflict, createComposerSubmissionStore } from './composer-submission.ts'
 
 const alt = isMac ? '⌥' : 'Alt'

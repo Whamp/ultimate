@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { previewEnv, remember, stopped } from '../extensions/instance/server.ts'
 import { at } from '../extensions/instance/links.ts'
+import { projectBase } from '../web/src/sdk/api.ts'
 
 const homes: string[] = []
 afterEach(async () => {
@@ -93,10 +94,24 @@ it('starts with no stopped previews in a fresh home', async () => {
   expect(stopped(hostOver(home)).size).toBe(0)
 })
 
+it.each([
+  ['/p/desk/one/', '/p/desk/one/conversation?conversation=7#top'],
+  ['/p/desk/one/conversation', '/p/desk/one/conversation?conversation=7#top'],
+  ['/', '/conversation?conversation=7#top'],
+])('keeps self links under the selected project at %s', (path, expected) => {
+  const link = new URL('http://127.0.0.1:45939/conversation?conversation=7#top')
+  expect(at(`https://cloud.example${projectBase(path)}`, link)).toBe(
+    `https://cloud.example${expected}`,
+  )
+})
+
 it('keeps a link on the preview origin even when its path starts with //', () => {
   const link = new URL('http://127.0.0.1:45939//evil.example/x?conversation=1#top')
   expect(at('http://127.0.0.1:45939', link)).toBe(
     'http://127.0.0.1:45939//evil.example/x?conversation=1#top',
   )
   expect(new URL(at('https://host.ts.net:4747', link)).host).toBe('host.ts.net:4747')
+  expect(at('https://cloud.example/p/desk/one', link)).toBe(
+    'https://cloud.example/p/desk/one//evil.example/x?conversation=1#top',
+  )
 })
