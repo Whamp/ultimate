@@ -164,12 +164,22 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
           title: 'Ship ledger',
           tasks: {
             'E1.1': {
+              key: 'E1.1',
+              title: 'Implement',
+              role: 'worker',
+              deps: [],
               status: 'in_review',
               child: 42,
               verdict: 'Checks passed',
               notes: [{ text: 'Checks passed', at: expect.any(String) }],
             },
-            'E1.2': { deps: ['E1.1'], role: 'reviewer' },
+            'E1.2': {
+              key: 'E1.2',
+              title: 'Review',
+              role: 'reviewer',
+              deps: ['E1.1'],
+              status: 'backlog',
+            },
           },
         },
       },

@@ -5,6 +5,8 @@ import { promisify } from 'node:util'
 import type { Usage } from '@earendil-works/pi-ai'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, test } from 'vitest'
+import { Plan } from '../extensions/plan/server.ts'
+import { context } from '../server/harness.ts'
 import { assistant, start, user } from './fixture.ts'
 
 const exec = promisify(execFile)
@@ -17,47 +19,67 @@ function measure(scenario: string, turn: { wallMs: number; usage: Usage }) {
 test('E1 plan ledger remains visible across turns', async () => {
   const ultimate = await start({ extensions: { enable: ['plan'] } })
   try {
-    const c = await ultimate.conversation({
-      history: [
-        user('Track our work in the plan ledger.'),
-        assistant('I will keep epics and tasks in the plan ledger.'),
-      ],
-    })
-    const turn = await c.run(
-      "Create an epic 'Ship ledger' with tasks Implement (worker) and Review (reviewer, depends on Implement); mark Implement in_review. Do not delegate or do the tasks.",
-    )
-    const calls = turn.toolCalls.filter((call) => call.name === 'plan')
-    expect(calls.some((call) => call.arguments.action === 'create')).toBe(true)
-    expect(
-      calls.filter((call) => call.arguments.action === 'add').map((call) => call.arguments),
-    ).toHaveLength(2)
-    expect(
-      calls.some(
-        (call) => call.arguments.action === 'update' && call.arguments.status === 'in_review',
-      ),
-    ).toBe(true)
-    expect(calls.every((call) => !call.isError)).toBe(true)
-    const implement = calls.find(
-      (call) => call.arguments.action === 'add' && call.arguments.title === 'Implement',
-    )!
-    const review = calls.find(
-      (call) => call.arguments.action === 'add' && call.arguments.title === 'Review',
-    )!
-    expect(implement.arguments.role).toBe('worker')
-    expect(review.arguments.role).toBe('reviewer')
-    const implemented = JSON.parse(
-      implement.result
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text)
-        .join('\n'),
-    )
-    expect(review.arguments.deps).toEqual([implemented.key])
+    const c = await ultimate.conversation()
+    // Establish a real turn without leaking the later ledger's task values into history.
+    const turn = await c.run('Reply only Ready. Do not call tools.')
+    expect(turn.toolCalls).toHaveLength(0)
     measure('E1-plan', turn)
-    const reply = await c.run('What is open? Give each task and its status. No tools.')
+
+    // Tool handling/persistence is covered by test/plan.test.ts; here seed actual durable state.
+    await ultimate.harness.commit(async (tx) => {
+      const plan = await tx.doc(Plan, c.id)
+      plan.next = 8
+      plan.epics.E7 = {
+        key: 'E7',
+        title: 'Verify lantern release',
+        body: 'Check the release map and cache.',
+        status: 'in_progress',
+        tasks: {
+          'E7.3': {
+            key: 'E7.3',
+            title: 'Compile zircon map',
+            role: 'worker',
+            description: 'Build the release map.',
+            deps: [],
+            status: 'in_review',
+            notes: [],
+          },
+          'E7.8': {
+            key: 'E7.8',
+            title: 'Audit amber cache',
+            role: 'reviewer',
+            description: 'Audit the cache after the map is ready.',
+            deps: ['E7.3'],
+            status: 'blocked',
+            notes: [],
+          },
+        },
+      }
+    }, context)
+    expect(await ultimate.harness.snapshot(Plan, c.id, context)).toMatchObject({
+      epics: {
+        E7: {
+          tasks: {
+            'E7.3': { role: 'worker', deps: [], status: 'in_review' },
+            'E7.8': { role: 'reviewer', deps: ['E7.3'], status: 'blocked' },
+          },
+        },
+      },
+    })
+
+    // Roles are persisted above but deliberately absent from the compact Plan prompt.
+    const reply = await c.run(
+      'What tasks are open in the current plan ledger? No tools. Return only a JSON array of objects with key, title, status, and deps (prerequisite task keys). Use exact ledger values.',
+    )
     expect(reply.toolCalls).toHaveLength(0)
-    expect(reply.text).toMatch(/Review/i)
-    expect(reply.text).toMatch(/Implement/i)
-    expect(reply.text).toMatch(/in[_ -]review/i)
+    const tasks = JSON.parse(reply.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''))
+    expect(tasks).toHaveLength(2)
+    expect(tasks).toEqual(
+      expect.arrayContaining([
+        { key: 'E7.3', title: 'Compile zircon map', status: 'in_review', deps: [] },
+        { key: 'E7.8', title: 'Audit amber cache', status: 'blocked', deps: ['E7.3'] },
+      ]),
+    )
     measure('E1-plan-follow-up', reply)
   } finally {
     await ultimate.stop()
