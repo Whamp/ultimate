@@ -37,8 +37,10 @@ with fixed calls and asserts roles, dependencies, statuses and persistence acros
 The real-model eval starts with a neutral turn, then seeds the durable `Plan` through a
 harness transaction, without putting task values in conversation history. Its later no-tool
 answer must give the exact task key/title/status/dependency records from the refreshed
-compact ledger. Roles are checked in persisted state, not in that answer: the compact
-prompt does not expose roles. The JSON oracle tolerates record order and code fences,
+compact ledger. The query explicitly requests dotted-key task records and excludes epic
+rows; the oracle still rejects extra rows rather than filtering them out.
+Roles are checked in persisted state, not in that answer: the compact prompt does not
+expose roles. The JSON oracle tolerates record order and code fences,
 not wrong task/status associations or a missing/reversed prerequisite relation.
 This isolates later model visibility from model choice of planning arguments; it does not
 prove model variance eliminated or turn an omitted argument into a persistence defect.

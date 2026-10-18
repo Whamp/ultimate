@@ -69,7 +69,7 @@ test('E1 plan ledger remains visible across turns', async () => {
 
     // Roles are persisted above but deliberately absent from the compact Plan prompt.
     const reply = await c.run(
-      'What tasks are open in the current plan ledger? No tools. Return only a JSON array of objects with key, title, status, and deps (prerequisite task keys). Use exact ledger values.',
+      'What task records (with dotted keys) are open in the current plan ledger? Exclude epic rows (keys without a dot). No tools. Return only a JSON array of objects with key, title, status, and deps (prerequisite task keys). Use exact ledger values.',
     )
     expect(reply.toolCalls).toHaveLength(0)
     const tasks = JSON.parse(reply.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''))
