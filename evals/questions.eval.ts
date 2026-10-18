@@ -5,6 +5,7 @@ import { askSummaryModel } from '../extensions/conversations/summary.ts'
 import { DEFAULT_SUMMARY_MODEL } from '../extensions/conversations/summary-model.ts'
 import { parseSummaryModel } from '../extensions/conversations/summary-model-ref.ts'
 import { parseQuestions, QUESTIONS_SYSTEM } from '../extensions/questions/server.ts'
+import { assertCloudflareDecisionOptions } from '../test/test-utils/assert-cloudflare-decision-options.ts'
 import type { TurnUsage } from './reporter.ts'
 
 /** Extract with the default summary model, as the questions extension does, and record the call's usage. */
@@ -69,10 +70,7 @@ test.for([1, 2, 3])(
     expect(decision.text).not.toMatch(/^decision:?$/i)
     expect(decision.options!.map((o) => o.label)).toHaveLength(3)
     expect(decision.options!.every((o) => !/^\s*\d+[.)]/.test(o.label))).toBe(true)
-    const first = decision.options![0]
-    expect(`${first.label} ${first.detail ?? ''}`).toMatch(/fold|epic/i)
-    expect(first.recommended).toBe(true)
-    expect(decision.options!.slice(1).some((o) => o.recommended)).toBe(false)
+    assertCloudflareDecisionOptions(decision.options!)
   },
 )
 
