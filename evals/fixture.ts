@@ -15,7 +15,8 @@ import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-d
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
-import { evalTestDeadline, waitForTurn } from './turn.ts'
+import { evalTestContext, waitForTurn } from './turn.ts'
+import type { EvalTurnTrace } from './traces.ts'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
 import { attach, until } from '../test/helpers.ts'
@@ -232,9 +233,10 @@ export async function start(
           async run(input: string) {
             const before = (await messages()).length
             const started = performance.now()
-            const deadline = evalTestDeadline.getStore()
-            if (deadline === undefined)
-              throw new Error('Eval test deadline missing; load evals/setup.ts')
+            const testContext = evalTestContext.getStore()
+            if (testContext === undefined) {
+              throw new Error('Eval test context missing; load evals/setup.ts')
+            }
             let turn: Message[] = []
             const usage = zeroUsage()
             let wallMs = 0
@@ -250,10 +252,12 @@ export async function start(
                     text: input,
                   })
                   const submission = await running.harness.submission(submissionId, context)
-                  if (!submission) throw new Error('Missing submitted input')
+                  if (!submission) {
+                    throw new Error('Missing submitted input')
+                  }
                   return submission
                 },
-                deadline,
+                testContext.deadlineMs,
               )
               completed = true
             } catch (cause) {
@@ -263,17 +267,27 @@ export async function start(
               // Failed turns can already have paid responses. Record those too, before cleanup removes the home.
               turn = (await messages()).slice(before)
               for (const reply of turn) {
-                if (reply.role !== 'assistant') continue
+                if (reply.role !== 'assistant') {
+                  continue
+                }
                 for (const key of [
                   'input',
                   'output',
                   'cacheRead',
                   'cacheWrite',
                   'totalTokens',
-                ] as const)
+                ] as const) {
                   usage[key] += reply.usage[key]
-                for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
+                }
+                for (const key of [
+                  'input',
+                  'output',
+                  'cacheRead',
+                  'cacheWrite',
+                  'total',
+                ] as const) {
                   usage.cost[key] += reply.usage.cost[key]
+                }
               }
               wallMs = performance.now() - started
               const measured: TurnUsage = {
@@ -288,18 +302,20 @@ export async function start(
               await appendFile(
                 traceFile,
                 JSON.stringify({
+                  testId: testContext.testId,
                   conversationId: id,
                   input,
                   ...measured,
                   messages: turn,
                   failure,
-                }) + '\n',
+                } satisfies EvalTurnTrace & TurnUsage) + '\n',
               )
             }
             const replies = turn.filter((m): m is AssistantMessage => m.role === 'assistant')
             const results = turn.filter((m): m is ToolResultMessage => m.role === 'toolResult')
-            if (!replies.length)
+            if (!replies.length) {
               throw new Error(`Model turn produced no assistant reply; trace: ${traceFile}`)
+            }
             return {
               text: replies
                 .flatMap((m) => m.content.filter((c) => c.type === 'text').map((c) => c.text))
@@ -308,8 +324,9 @@ export async function start(
                 .flatMap((m) => m.content.filter((c): c is ToolCall => c.type === 'toolCall'))
                 .map((call) => {
                   const result = results.find((r) => r.toolCallId === call.id)
-                  if (!result)
+                  if (!result) {
                     throw new Error(`Tool ${call.name} has no result; trace: ${traceFile}`)
+                  }
                   return { ...call, result: result.content, isError: result.isError }
                 }),
               usage,

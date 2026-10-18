@@ -6,7 +6,8 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import { defineExtension, defineTask, defineTool } from '@earendil-works/pi-durable'
 import type { Conversation, Harness } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
-import { evalTestDeadline, readEvalDiagnostics, waitForTurn } from '../evals/turn.ts'
+import { evalTestContext, readEvalDiagnostics, waitForTurn } from '../evals/turn.ts'
+import { EVAL_BUDGETS } from '../evals/budgets.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { temp } from './helpers.ts'
@@ -87,7 +88,9 @@ async function fixture() {
 
 async function until(predicate: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 1000; i++) {
-    if (await predicate()) return
+    if (await predicate()) {
+      return
+    }
     await vi.advanceTimersByTimeAsync(1)
     await yieldToIO()
   }
@@ -106,17 +109,33 @@ function turn(
   )
 }
 
+it('eval budgets retain the original caps and reserve cleanup time once per test', () => {
+  expect(EVAL_BUDGETS).toEqual({
+    outerTestMs: 300_000,
+    activeTestMs: 270_000,
+    turnMs: 240_000,
+    diagnosticCleanupMs: 30_000,
+  })
+  expect(EVAL_BUDGETS.activeTestMs + EVAL_BUDGETS.diagnosticCleanupMs).toBe(
+    EVAL_BUDGETS.outerTestMs,
+  )
+  expect(EVAL_BUDGETS.turnMs).toBeLessThan(EVAL_BUDGETS.activeTestMs)
+})
+
 it('concurrent evals retain independent active-test deadlines across async work', async () => {
   const deadlines = await Promise.all(
     [270_000, 280_000].map((deadline) =>
-      evalTestDeadline.run(deadline, async () => {
+      evalTestContext.run({ testId: `test-${deadline}`, deadlineMs: deadline }, async () => {
         await yieldToIO()
-        return evalTestDeadline.getStore()
+        return evalTestContext.getStore()
       }),
     ),
   )
-  expect(deadlines).toEqual([270_000, 280_000])
-  expect(evalTestDeadline.getStore()).toBeUndefined()
+  expect(deadlines).toEqual([
+    { testId: 'test-270000', deadlineMs: 270_000 },
+    { testId: 'test-280000', deadlineMs: 280_000 },
+  ])
+  expect(evalTestContext.getStore()).toBeUndefined()
 })
 
 it('deadline identifies a real held tool, its arguments, submission and whole-harness scope', async () => {

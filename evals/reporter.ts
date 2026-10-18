@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DefaultReporter } from 'vitest/node'
-import type { Vitest } from 'vitest/node'
+import type { TestCase, Vitest } from 'vitest/node'
+import { printFailedEvalTraces } from './traces.ts'
 
 export interface TurnUsage {
   model: string
@@ -23,7 +24,9 @@ declare module 'vitest' {
 export default class EvalReporter extends DefaultReporter {
   private directory = ''
   private usageFile = ''
+  private traceFile = ''
   private started = 0
+  private failedTests = new Set<string>()
 
   onInit(ctx: Vitest) {
     super.onInit(ctx)
@@ -31,15 +34,28 @@ export default class EvalReporter extends DefaultReporter {
     this.usageFile = join(this.directory, 'turns.jsonl')
     writeFileSync(this.usageFile, '')
     ctx.provide('evalUsageFile', this.usageFile)
-    const traceFile = join(this.directory, 'traces.jsonl')
-    writeFileSync(traceFile, '')
-    ctx.provide('evalTraceFile', traceFile)
+    this.traceFile = join(this.directory, 'traces.jsonl')
+    writeFileSync(this.traceFile, '')
+    ctx.provide('evalTraceFile', this.traceFile)
     process.stdout.write(`Eval evidence: ${this.directory}\n`)
     this.started = performance.now()
   }
 
+  onTestCaseResult(testCase: TestCase) {
+    super.onTestCaseResult(testCase)
+    if (testCase.result().state === 'failed') {
+      this.failedTests.add(testCase.id)
+    }
+  }
+
   async onTestRunEnd(...args: Parameters<DefaultReporter['onTestRunEnd']>) {
     super.onTestRunEnd(...args)
+    // Read after all workers finish, not while another concurrent test may still be appending a trace.
+    for (const testId of this.failedTests) {
+      await printFailedEvalTraces(this.traceFile, testId, (text) => {
+        process.stdout.write(text)
+      })
+    }
     const turns = (await readFile(this.usageFile, 'utf8'))
       .split('\n')
       .filter(Boolean)

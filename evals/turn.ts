@@ -2,9 +2,16 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { LiveDoc } from '@earendil-works/pi-durable'
 import type { Conversation, Harness, Submission } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
+import { EVAL_BUDGETS } from './budgets.ts'
 
-/** Shared active-test deadline in monotonic milliseconds; the final 30s are for diagnostics and cleanup. */
-export const evalTestDeadline = new AsyncLocalStorage<number>()
+/** Per-test identity and monotonic deadline, shared across all fixtures and turns in that test. */
+export interface EvalTestContext {
+  testId: string
+  deadlineMs: number
+}
+
+/** Async-local attribution keeps concurrent tests' deadlines and diagnostic traces separate. */
+export const evalTestContext = new AsyncLocalStorage<EvalTestContext>()
 
 /** Read committed eval entries without keeping a live view mounted. */
 export async function readEvalEntries(conversation: Conversation) {
@@ -83,7 +90,7 @@ export async function waitForTurn(
   testDeadlineMs: number,
 ) {
   const started = performance.now()
-  const turnBudgetMs = Math.max(0, Math.min(240_000, testDeadlineMs - started))
+  const turnBudgetMs = Math.max(0, Math.min(EVAL_BUDGETS.turnMs, testDeadlineMs - started))
   let before = 0
   let stage = 'submitting'
   let submission: Submission | undefined
@@ -91,7 +98,9 @@ export async function waitForTurn(
   try {
     await Promise.race([
       (async () => {
-        if (!turnBudgetMs) throw new Error('Eval test deadline exhausted before submission')
+        if (!turnBudgetMs) {
+          throw new Error('Eval test deadline exhausted before submission')
+        }
         before = (await readEvalEntries(conversation)).length
         submission = await submit()
         stage = 'awaiting-submission'
@@ -122,12 +131,12 @@ export async function waitForTurn(
         {
           stage,
           elapsedMs: performance.now() - started,
-          testElapsedMs: 270_000 - (testDeadlineMs - performance.now()),
+          testElapsedMs: EVAL_BUDGETS.activeTestMs - (testDeadlineMs - performance.now()),
           turnBudgetMs,
           testDeadlineMs,
           testRemainingMs: testDeadlineMs - performance.now(),
-          outerTestBudgetMs: 300_000,
-          diagnosticCleanupReserveMs: 30_000,
+          outerTestBudgetMs: EVAL_BUDGETS.outerTestMs,
+          diagnosticCleanupReserveMs: EVAL_BUDGETS.diagnosticCleanupMs,
           ...diagnostics,
         },
         null,
